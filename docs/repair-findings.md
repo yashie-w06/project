@@ -2,43 +2,48 @@
 
 ## Outcome
 
-The public route flow, outdoor editor, indoor floor editor, and routing engine were repaired as one integrated application. Browser verification was performed at desktop and mobile sizes with labelled test fixtures, followed by a live local-browser smoke test against the Railway-backed database.
+The public route flow, outdoor editor, indoor floor editor, and routing engine now operate as one integrated application. Eligible OSM campus geometry may support a route only as **provisional** map data. It is visually distinct from confirmed paths and every such result states that paths and accessibility have not been field-verified.
 
-No campus route was approved during this work. The previously published OSM carriageway (`995119335`) was safely changed to `verified=false`, `published=false`, and its candidate was changed to `needs_edit`. Its geometry and nodes remain available for later review. The live database now has zero verified/published real-campus route edges, so unconnected real locations display **“No verified route available.”**
+Central Library to LT is the live acceptance route. It uses provisional OSM ways `202920189` and `202920186`, plus an approximate connector from each building boundary to the network. The API returns four provenance-bearing segments, the map draws the provisional route, and the UI labels both approaches as unconfirmed. No candidate or editor path was falsely marked verified.
+
+Rejected and `needs_edit` candidates remain excluded. The quarantined carriageway `995119335` is still unverified and unpublished, and candidate `1264482101` remains rejected.
 
 ## Root causes and repairs
 
-- Route snapping did not consistently use the same profile/block eligibility rules as A*. Snapping now filters the same eligible edge set and rejects non-finite coordinates.
-- Two points snapped to the same edge could create incorrect full-edge geometry. Ordered, topology-preserving edge splitting now returns only the requested partial segment.
-- Graph inputs could contain slightly mismatched edge endpoints. Graph construction normalizes tolerated offsets, validates continuity, and reports deterministic connected components.
-- Public location selection mixed search, map picks, and confirmation state. It is now an explicit Start → Destination → Profile/Route flow with stable result selection, edit/back actions, and GPS only on Start.
-- No-route behavior depended on parsing free-form text. The API now returns typed reason codes and the UI maps every failure to visitor-safe language beginning with “No verified route available.”
-- The outdoor editor was form-led and obscured spatial context. It is now map-first with explicit point, path, OSM-review, and alert/block tools; detached paths remain non-routable drafts.
-- OSM review and publication are separated. Reference approval never publishes a route; publication requires an explicit physical-verification confirmation and server-side graph checks.
-- Floor editing used a raw building ID and fixed-size canvas. It now provides mapped-building search/map selection, saved floor selection, responsive canvas sizing, centered labels, reliable inverse transforms, geometry containment checks, and versioned draft/publish persistence.
-- Exit linking was incomplete. A ground-floor exterior exit can now be linked only to a node on an already verified, published main path, in a transaction.
-- Alert management could create blocks but did not expose a complete resolution workflow. Active/resolved alerts and their affected edges are now returned to the editor and can be toggled safely.
+- The original graph considered only field-confirmed editor edges, leaving the campus unusable before a survey. The graph now combines confirmed editor edges with a conservative, separately labelled provisional OSM graph.
+- OSM eligibility rejects arterial roads, explicit walking prohibitions, reviewer rejections, barriers, building-interior crossings, and unsupported classes. Campus service geometry with walking evidence is provisional, never confirmed.
+- OSM ways connect only at shared source node IDs or their own endpoints. Close or visually crossing lines are not invented as junctions.
+- Buildings without confirmed linked exits use a bounded nearest boundary/network approach. Connectors are rejected if too distant or if they cross a building interior.
+- Route responses include per-segment source/confidence, approach metadata, typed no-route codes, and a stable provisional safety warning.
+- Snapping uses the same profile/block eligibility rules as A*. Same-edge splits return only the requested continuous partial geometry.
+- Public selection is an explicit Start to Destination to Profile/Route flow. Confirmed, provisional, approximate, and excluded geometry use distinct map styles.
+- The outdoor editor is map-first and distinguishes confirmed edges, provisional candidates, drafts, and excluded references. Reviewer rejection or `needs_edit` invalidates provisional use immediately.
+- Floor editing supports map-first building/floor selection, responsive canvas sizing, mouse/touch zoom, centered labels, geometry repair warnings, contained components, and versioned draft/publish persistence.
+- Exit linking remains guarded: a confirmed exit link requires a verified, published main-path node. Provisional building approaches do not manufacture door verification.
+- Raster basemap tile failure no longer hides usable campus vectors or routes.
 
-## Data observations
+## Live data and OSM observations
 
-The sanitized live audit found 49 buildings and 15 OSM reference candidates. There are no floors or floor features yet. After quarantine, the one retained route edge is a non-routable draft/reference. Candidate decisions are 13 pending, one needs-edit, and one rejected. On-site classification remains the task in [`field-verification.md`](field-verification.md).
+The Railway-backed database contains 49 buildings and 15 imported OSM highway candidates. Twelve private campus service ways are eligible for provisional use; the two tertiary carriageways and one tertiary link are excluded. The bundled extract and a fresh official OSM bbox inspection contained no `footway`, `path`, or `pedestrian` ways, so the software does not claim that these service ways are mapped pedestrian paths.
+
+The importer is deterministic and idempotent, stores tags and eligibility reasons, and preserves reviewer decisions. Public map data currently exposes 12 provisional candidates and 3 excluded/reference candidates. The routing graph is rebuilt from current database state for each request, so reviews and active blocks do not wait on a stale cache.
 
 ## Verification performed
 
-- TypeScript typecheck for API and web.
-- API and web unit tests, including routing profiles, block/unblock, same-edge splitting, disconnected components, finite geometry, floor containment, door/exit validation, and public wizard state.
-- Railway-backed integration fixtures with unique IDs and cleanup for auth, routing profiles, same-edge output, messages, alerts, persistence/restart, and floor save/reload.
-- Playwright desktop and mobile flows for the public no-route path and map-first floor editor.
-- Live Chromium smoke test using real mapped buildings, the real local API/Railway data, editor authentication, honest no-route output, and floor canvas loading. It performs no persistent editor mutation.
+- TypeScript checks and production builds for API and web.
+- 25 API unit tests and 22 web unit tests covering OSM eligibility, graph construction, profiles, snapping/splitting, provisional provenance, approaches, public state, and floor geometry.
+- Railway-backed integration coverage for Central Library to LT, exact OSM provenance, two approaches, auth, confirmed fixture profiles, same-edge routing, reports, block/unblock, persistence/restart, floor save/reload, and public map counts.
+- Playwright desktop and mobile public/editor flows (4 tests).
+- Live Chromium verification against the Railway-backed data: Central Library to LT rendered on the map, the warning and approximate approaches were visible, outdoor/floor editors loaded, and no application console errors occurred.
 
-Generated review screenshots are written to ignored `test-results/` by the browser suites. Run `pnpm test:e2e` for fixture screenshots and `node tests/e2e/live-smoke.mjs` while local API/web servers are running for live screenshots.
+Generated screenshots are ignored under `test-results/`. Start the local API and web services, then run `node tests/e2e/live-smoke.mjs` to reproduce live evidence.
 
 ## Deployment configuration
 
-Railway uses the repository-root `railway.toml`, builds the API, runs migrations plus the idempotent OSM reference import before deployment, starts the compiled server, and checks `/api/health`. Production `DATABASE_URL` must use Railway’s internal `${{Postgres.DATABASE_URL}}` reference; never use the local public proxy URL there.
+Railway uses repository-root `railway.toml`, runs migrations and the idempotent OSM import before starting the API, and checks `/api/health`. Production `DATABASE_URL` must use Railway's internal `${{Postgres.DATABASE_URL}}` reference; the public proxy URL is local-only.
 
-Vercel uses `apps/web` as its root, the Vite build, `dist` output, and `apps/web/vercel.json` SPA rewrites. Set `VITE_API_URL` to the public Railway API origin. Set Railway `WEB_ORIGIN` to the exact Vercel production origin.
+Vercel uses `apps/web`, the Vite build and `dist` output, with SPA rewrites from `apps/web/vercel.json`. Set `VITE_API_URL` to the Railway API origin and Railway `WEB_ORIGIN` to the exact Vercel origin.
 
-## Remaining non-software work
+## Remaining field work
 
-Physical route verification is deliberately deferred and does not block deployment. Until the survey is completed, leave all candidates unapproved and all real campus paths excluded from public routing. Do not infer junctions from imagery or use OSM lines as trusted walking paths.
+Physical verification is deliberately separate and does not block software deployment. The later survey in [`field-verification.md`](field-verification.md) can promote suitable geometry to confirmed editor paths and record accessibility. Until then, provisional results must keep their warning and must not claim wheelchair verification.

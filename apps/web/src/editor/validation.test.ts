@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DoorFeature, FloorLayout } from "./types";
-import { floorToMap, mapToFloor, screenToFloorPoint } from "./transform";
+import {
+  floorToMap,
+  mapToFloor,
+  screenToFloorPoint,
+  zoomViewAtPoint,
+} from "./transform";
 import { isExitEligible, validateFloorLayout } from "./validation";
 
 function baseLayout(features: FloorLayout["features"] = []): FloorLayout {
@@ -58,6 +63,15 @@ describe("floor-to-map transform", () => {
       screenToFloorPoint({ x: 1, y: 1 }, { x: 0, y: 0, scale: 0 }),
     ).toBeUndefined();
   });
+
+  it("keeps the floor coordinate beneath a wheel or pinch zoom stationary", () => {
+    const pointer = { x: 175, y: 90 };
+    const before = { x: 25, y: -30, scale: 1.5 };
+    const after = zoomViewAtPoint(before, pointer, 3)!;
+    expect(screenToFloorPoint(pointer, after)).toEqual(
+      screenToFloorPoint(pointer, before),
+    );
+  });
 });
 
 describe("exit validation", () => {
@@ -108,6 +122,20 @@ describe("exit validation", () => {
       (issue) => issue.code,
     );
     expect(codes).toContain("invalid-exit-parent");
+  });
+
+  it("reports a saved door whose normalized edge position is invalid", () => {
+    const issues = validateFloorLayout(
+      baseLayout([exteriorDoor({ position: -0.1 })]),
+    );
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "door-parent-missing",
+          featureId: "d1",
+        }),
+      ]),
+    );
   });
 });
 

@@ -16,11 +16,10 @@ import {
 } from "../schemas.js";
 
 export type NoRouteCode =
-  | "NO_VERIFIED_PATHS"
+  | "NO_WALKABLE_GRAPH"
   | "START_UNREACHABLE"
   | "DEST_UNREACHABLE"
-  | "NO_LINKED_EXIT"
-  | "NO_LINKED_ENTRANCE"
+  | "NO_PLAUSIBLE_APPROACH"
   | "DIFFERENT_COMPONENTS"
   | "BLOCKED_OR_INELIGIBLE";
 type RouteResult =
@@ -28,6 +27,20 @@ type RouteResult =
       status: "ok";
       geometry: LineString;
       notices: string[];
+      segments: Array<{
+        geometry: LineString;
+        source: "editor" | "osm" | "approach";
+        confidence: "confirmed" | "provisional" | "approximate";
+        sourceId?: string;
+      }>;
+      approaches: Array<{
+        role: "start" | "destination";
+        buildingId: string;
+        boundary: [number, number];
+        network: [number, number];
+        approximate: true;
+      }>;
+      containsProvisional: boolean;
       selectedEntranceDoorId?: string;
       snaps?: unknown[];
     }
@@ -58,7 +71,7 @@ export function publicRoutes(
       const [buildings, candidates, edges, points, alerts] = await Promise.all([
         db.query("SELECT id, name, footprint FROM buildings ORDER BY name"),
         db.query(
-          "SELECT id, source_way_id, coordinates, reviewer_decision FROM osm_candidates ORDER BY source_way_id",
+          "SELECT id, source_way_id, coordinates, reviewer_decision, provisional_eligible, provisional_exclusion_reason FROM osm_candidates ORDER BY source_way_id",
         ),
         db.query(
           "SELECT id, kind, coordinates, blocked FROM route_edges WHERE verified AND published ORDER BY id",
@@ -76,17 +89,30 @@ export function publicRoutes(
         properties: { id: row.id, name: row.name },
         geometry: row.footprint,
       }));
-      const referenceFeatures = candidates.rows.map(
-        (row): Feature<LineString> => ({
+      const referenceFeatures = candidates.rows
+        .filter((row) => !row.provisional_eligible)
+        .map((row): Feature<LineString> => ({
           type: "Feature",
           id: row.id,
           properties: {
             sourceWayId: row.source_way_id,
             decision: row.reviewer_decision,
+            exclusionReason: row.provisional_exclusion_reason,
           },
           geometry: { type: "LineString", coordinates: row.coordinates },
-        }),
-      );
+        }));
+      const provisionalFeatures = candidates.rows
+        .filter((row) => row.provisional_eligible)
+        .map((row): Feature<LineString> => ({
+          type: "Feature",
+          id: row.id,
+          properties: {
+            id: row.id,
+            sourceWayId: row.source_way_id,
+            status: "provisional",
+          },
+          geometry: { type: "LineString", coordinates: row.coordinates },
+        }));
       const verifiedFeatures = edges.rows.map((row): Feature<LineString> => ({
         type: "Feature",
         id: row.id,
@@ -102,6 +128,7 @@ export function publicRoutes(
       response.json({
         buildings: collection(buildingFeatures),
         referencePaths: collection(referenceFeatures),
+        provisionalPaths: collection(provisionalFeatures),
         verifiedPaths: collection(verifiedFeatures),
         points: collection(pointFeatures),
         alerts: alerts.rows.map((row) => ({

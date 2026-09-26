@@ -51,3 +51,88 @@ test("bad editor credentials receive 401", async () => {
     .send({ email: "editor@example.com", password: "wrong" });
   assert.equal(response.status, 401);
 });
+
+test("unlinked buildings use provisional OSM geometry and approximate boundary approaches", async () => {
+  const footprint = (west: number, east: number) => ({
+    type: "Polygon",
+    coordinates: [
+      [
+        [west, 22.72605],
+        [east, 22.72605],
+        [east, 22.72615],
+        [west, 22.72615],
+        [west, 22.72605],
+      ],
+    ],
+  });
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.includes("FROM osm_candidates"))
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: "osm-path-test",
+              source_way_id: "test",
+              source_node_ids: ["a", "b"],
+              coordinates: [
+                [75.871, 22.726],
+                [75.872, 22.726],
+              ],
+              tags: { highway: "service", access: "private" },
+              reviewer_decision: null,
+            },
+          ],
+        };
+      if (sql.includes("FROM buildings"))
+        return {
+          rowCount: 2,
+          rows: [
+            {
+              id: "library",
+              name: "Library",
+              source_osm_id: "library",
+              footprint: footprint(75.8711, 75.8712),
+              mapped_level_count: 1,
+            },
+            {
+              id: "lt",
+              name: "LT",
+              source_osm_id: "lt",
+              footprint: footprint(75.8718, 75.8719),
+              mapped_level_count: 1,
+            },
+          ],
+        };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "building", buildingId: "library", floor: 0 },
+      destination: { kind: "building", buildingId: "lt", floor: 0 },
+    });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "ok");
+  assert.equal(response.body.containsProvisional, true);
+  assert.equal(response.body.approaches.length, 2);
+  assert.ok(
+    response.body.segments.some(
+      (segment: { source: string }) => segment.source === "osm",
+    ),
+  );
+  assert.deepEqual(
+    response.body.geometry.coordinates[0],
+    response.body.approaches[0].boundary,
+  );
+  assert.deepEqual(
+    response.body.geometry.coordinates.at(-1),
+    response.body.approaches[1].boundary,
+  );
+});

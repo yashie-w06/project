@@ -2,6 +2,8 @@ import type { LonLat } from "../osm/types.js";
 
 export type TravelProfile = "healthy" | "wheelchair" | "heavy_luggage";
 export type RouteEdgeKind = "main" | "shortcut";
+export type RouteEdgeStatus = "confirmed" | "provisional" | "draft";
+export type RouteEdgeSource = "editor" | "osm" | "query";
 
 export interface RouteNode {
   readonly id: string;
@@ -15,9 +17,14 @@ export interface RouteEdge {
   readonly coordinates: readonly LonLat[];
   readonly kind: RouteEdgeKind;
   readonly verified: boolean;
+  /** Explicit confidence. `verified` remains for stored editor-row compatibility. */
+  readonly status?: RouteEdgeStatus;
+  readonly source?: RouteEdgeSource;
   readonly blocked?: boolean;
   readonly oneWay?: boolean;
   readonly sourceOsmId?: string | null;
+  readonly osmHighway?: string | null;
+  readonly wheelchairEligible?: boolean;
 }
 
 export interface ActiveBlock {

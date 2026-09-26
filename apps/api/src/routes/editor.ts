@@ -483,7 +483,10 @@ export function editorRoutes(
       return response.status(400).json({ error: "Invalid review" });
     try {
       const result = await db.query(
-        "UPDATE osm_candidates SET reviewer_decision=$1,import_status='reviewed',version=version+1,updated_at=now() WHERE id=$2 AND version=$3 RETURNING *",
+        `UPDATE osm_candidates SET reviewer_decision=$1,import_status='reviewed',
+          provisional_eligible=CASE WHEN $1 IN ('rejected','needs_edit') THEN false ELSE provisional_eligible END,
+          provisional_exclusion_reason=CASE WHEN $1 IN ('rejected','needs_edit') THEN 'review_' || $1 ELSE provisional_exclusion_reason END,
+          version=version+1,updated_at=now() WHERE id=$2 AND version=$3 RETURNING *`,
         [parsed.data.decision, request.params.id, parsed.data.version],
       );
       if (!result.rowCount)
@@ -491,6 +494,7 @@ export function editorRoutes(
           error: "Candidate was changed elsewhere",
           affectedIds: [request.params.id],
         });
+      onGraphChange();
       response.json(result.rows[0]);
     } catch (e) {
       next(e);

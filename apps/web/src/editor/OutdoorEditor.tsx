@@ -22,6 +22,8 @@ type GraphData = {
     verified: boolean;
     published: boolean;
     blocked: boolean;
+    source?: "editor" | "osm";
+    status?: "confirmed" | "provisional" | "draft";
     version: number;
   }>;
   candidates: Array<{
@@ -29,6 +31,9 @@ type GraphData = {
     source_way_id: string;
     reviewer_decision?: string;
     import_status?: string;
+    provisional_eligible?: boolean;
+    provisional_exclusion_reason?: string;
+    status?: string;
     version: number;
     coordinates: Coordinate[];
   }>;
@@ -89,6 +94,16 @@ function countComponents(data?: GraphData) {
     }
   }
   return count;
+}
+
+function candidateStatus(candidate: GraphData["candidates"][number]) {
+  if (candidate.reviewer_decision === "rejected") return "rejected";
+  if (candidate.reviewer_decision === "needs_edit") return "needs_edit";
+  if (candidate.status === "field_verified") return "field_verified";
+  if (candidate.reviewer_decision === "approved") return "approved";
+  if (candidate.status && candidate.status !== "imported")
+    return candidate.status;
+  return "provisional";
 }
 
 export function OutdoorEditor({
@@ -166,7 +181,7 @@ export function OutdoorEditor({
   const filteredCandidates = useMemo(
     () =>
       data?.candidates.filter((candidate) => {
-        const decision = candidate.reviewer_decision ?? "pending";
+        const decision = candidateStatus(candidate);
         return (
           (decisionFilter === "all" || decision === decisionFilter) &&
           `${candidate.source_way_id} ${decision}`
@@ -181,6 +196,14 @@ export function OutdoorEditor({
   const drafts =
     data?.edges.filter((edge) => !edge.verified || !edge.published).length ?? 0;
   const blocked = data?.edges.filter((edge) => edge.blocked).length ?? 0;
+  const provisional =
+    data?.candidates.filter(
+      (candidate) =>
+        candidate.provisional_eligible === true &&
+        !["rejected", "needs_edit", "field_verified"].includes(
+          candidateStatus(candidate),
+        ),
+    ).length ?? 0;
   const pendingMarker =
     mode === "point"
       ? pointPosition
@@ -505,12 +528,12 @@ export function OutdoorEditor({
             <h3>Graph readiness</h3>
             <dl>
               <div>
-                <dt>Published edges</dt>
+                <dt>Confirmed edges</dt>
                 <dd>{publishedEdges}</dd>
               </div>
               <div>
-                <dt>Draft edges</dt>
-                <dd>{drafts}</dd>
+                <dt>Provisional OSM</dt>
+                <dd>{provisional}</dd>
               </div>
               <div>
                 <dt>Components</dt>
@@ -520,11 +543,15 @@ export function OutdoorEditor({
                 <dt>Blocked edges</dt>
                 <dd>{blocked}</dd>
               </div>
+              <div>
+                <dt>Draft edges</dt>
+                <dd>{drafts}</dd>
+              </div>
             </dl>
             {publishedEdges < 2 && (
               <p>
-                No broad campus coverage yet. Public routing will honestly
-                report no verified route where locations are unconnected.
+                Confirmed coverage is limited. Eligible provisional OSM paths
+                can still support a clearly labelled suggested route.
               </p>
             )}
           </div>
@@ -632,8 +659,11 @@ export function OutdoorEditor({
                   onChange={(event) => setDecisionFilter(event.target.value)}
                 >
                   <option value="all">All statuses</option>
-                  <option value="pending">Pending</option>
+                  <option value="provisional">Provisional</option>
                   <option value="approved">Approved reference</option>
+                  <option value="field_verified">
+                    Field-verified / published
+                  </option>
                   <option value="needs_edit">Needs edit</option>
                   <option value="rejected">Rejected</option>
                 </select>
@@ -649,7 +679,7 @@ export function OutdoorEditor({
                   >
                     <b>Way {candidate.source_way_id}</b>
                     <span>
-                      {candidate.reviewer_decision ?? "pending"} ·{" "}
+                      {candidateStatus(candidate).replace("_", " ")} ·{" "}
                       {candidate.coordinates.length} vertices
                     </span>
                   </button>
@@ -660,7 +690,7 @@ export function OutdoorEditor({
                   <h4>Way {selectedCandidate.source_way_id}</h4>
                   <p>
                     {selectedCandidate.coordinates.length} vertices ·{" "}
-                    {selectedCandidate.reviewer_decision ?? "pending"}
+                    {candidateStatus(selectedCandidate).replace("_", " ")}
                   </p>
                   <div className="decision-buttons">
                     <button onClick={() => void review("needs_edit")}>
@@ -776,9 +806,9 @@ export function OutdoorEditor({
                 together.
               </p>
               <p className="muted">
-                OSM candidates are reference geometry only and never enter
-                public routing from this view without explicit field
-                verification.
+                Eligible OSM geometry may support suggested routes as
+                provisional map data. Only field-verified editor paths are shown
+                as confirmed; rejected and needs-edit ways never route.
               </p>
             </section>
           )}

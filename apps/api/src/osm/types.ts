@@ -35,7 +35,8 @@ export interface OsmBuildingCandidate {
   readonly footprint: Feature<Polygon>;
 }
 
-export type OsmReviewDecision = "pending" | "approved" | "rejected";
+export type OsmReviewDecision =
+  "pending" | "approved" | "rejected" | "needs_edit";
 
 /** Reference-only data. This shape deliberately has no `verified` property. */
 export interface OsmPathCandidate {
@@ -44,6 +45,7 @@ export interface OsmPathCandidate {
   readonly orderedNodeIds: readonly string[];
   readonly coordinates: readonly LonLat[];
   readonly tags: OsmTags;
+  readonly barrierNodeIds: readonly string[];
   readonly importStatus: "imported";
   readonly reviewerDecision: OsmReviewDecision;
   readonly geometry: Feature<LineString>;

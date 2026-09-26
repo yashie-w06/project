@@ -13,6 +13,8 @@ try {
       await rows(`SELECT
       (SELECT count(*)::int FROM buildings) buildings,
       (SELECT count(*)::int FROM osm_candidates) candidates,
+      (SELECT count(*)::int FROM osm_candidates WHERE provisional_eligible) provisional_candidates,
+      (SELECT count(*)::int FROM osm_candidates WHERE NOT provisional_eligible) excluded_candidates,
       (SELECT count(*)::int FROM route_nodes) nodes,
       (SELECT count(*)::int FROM route_edges) edges,
       (SELECT count(*)::int FROM outdoor_points) points,
@@ -34,7 +36,7 @@ try {
       `SELECT n.id FROM route_nodes n WHERE NOT EXISTS (SELECT 1 FROM route_edges e WHERE e.from_node_id=n.id OR e.to_node_id=n.id) ORDER BY n.id`,
     ),
     reviewedCandidates: await rows(
-      `SELECT source_way_id,reviewer_decision FROM osm_candidates WHERE reviewer_decision IS NOT NULL ORDER BY source_way_id`,
+      `SELECT source_way_id,reviewer_decision,provisional_eligible,provisional_exclusion_reason FROM osm_candidates WHERE reviewer_decision IS NOT NULL ORDER BY source_way_id`,
     ),
     floorStates: await rows(
       `SELECT status,count(*)::int FROM floors GROUP BY status ORDER BY status`,

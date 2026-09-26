@@ -132,6 +132,23 @@ describe("door attachment", () => {
     expect(nearestDoorSnap({ x: 5, y: 5 }, layout(), 0.25)).toBeUndefined();
   });
 
+  it("rejects malformed saved positions instead of silently clamping them", () => {
+    const base = layout();
+    expect(
+      doorLocalPoint(
+        {
+          id: "door-bad",
+          kind: "door",
+          name: "Bad door",
+          parent: { kind: "exterior", edgeIndex: 0 },
+          position: 1.2,
+          isExit: false,
+        },
+        base,
+      ),
+    ).toBeUndefined();
+  });
+
   it("recognises an exterior edge as an eligible normalized attachment", () => {
     const snap = nearestDoorSnap({ x: 8, y: 0.15 }, layout(), 0.25);
     expect(snap?.parent).toEqual({ kind: "exterior", edgeIndex: 0 });

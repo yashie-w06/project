@@ -5,7 +5,13 @@ import maplibregl, {
   Map,
   Marker,
 } from "maplibre-gl";
-import type { Feature, Geometry, LineString } from "geojson";
+import type {
+  Feature,
+  FeatureCollection,
+  Geometry,
+  LineString,
+  Point,
+} from "geojson";
 import type { CampusMapData, Coordinate } from "../types";
 import "./campus-map.css";
 
@@ -15,6 +21,14 @@ interface Props {
   destination?: Coordinate;
   pending?: Coordinate;
   route?: Feature<LineString>;
+  routeSegments?: FeatureCollection<
+    LineString,
+    { confidence?: string; status?: string; source?: string }
+  >;
+  approachPoints?: FeatureCollection<
+    Point,
+    { role?: string; approximate?: boolean; label?: string }
+  >;
   selectedBuildingId?: string;
   focus?: Feature<Geometry> | Coordinate;
   highlight?: Feature<Geometry>;
@@ -45,6 +59,8 @@ export function CampusMap({
   destination,
   pending,
   route,
+  routeSegments,
+  approachPoints,
   selectedBuildingId,
   focus,
   highlight,
@@ -87,7 +103,11 @@ export function CampusMap({
       handlers.current.onPick?.([event.lngLat.lng, event.lngLat.lat]),
     );
     map.on("error", (event) => {
-      if (event.error) setFailed(true);
+      // A raster basemap tile can fail independently while the campus vectors,
+      // route, and editor remain fully usable. Only surface structural map
+      // errors as a failed workspace.
+      const sourceId = (event as { sourceId?: string }).sourceId;
+      if (event.error && sourceId !== "osm") setFailed(true);
     });
     mapRef.current = map;
     const observer = new ResizeObserver(() => map.resize());
@@ -105,9 +125,27 @@ export function CampusMap({
     const map = mapRef.current;
     if (!map || !data) return;
     const install = () => {
+      const extendedData = data as CampusMapData & {
+        provisionalPaths?: FeatureCollection<LineString>;
+        excludedPaths?: FeatureCollection<LineString>;
+      };
       const sources: Array<[string, object]> = [
         ["buildings", data.buildings],
         ["references", data.referencePaths],
+        [
+          "provisional",
+          extendedData.provisionalPaths ?? {
+            type: "FeatureCollection",
+            features: [],
+          },
+        ],
+        [
+          "excluded-references",
+          extendedData.excludedPaths ?? {
+            type: "FeatureCollection",
+            features: [],
+          },
+        ],
         ["verified", data.verifiedPaths],
         ["points", data.points],
       ];
@@ -162,6 +200,30 @@ export function CampusMap({
             "line-opacity": 0.55,
           },
         });
+      if (!map.getLayer("provisional-paths"))
+        map.addLayer({
+          id: "provisional-paths",
+          type: "line",
+          source: "provisional",
+          paint: {
+            "line-color": "#d18a14",
+            "line-width": 4,
+            "line-dasharray": [1.5, 1.4],
+            "line-opacity": 0.88,
+          },
+        });
+      if (!map.getLayer("excluded-references"))
+        map.addLayer({
+          id: "excluded-references",
+          type: "line",
+          source: "excluded-references",
+          paint: {
+            "line-color": "#9b3d3d",
+            "line-width": 2,
+            "line-dasharray": [1, 2.5],
+            "line-opacity": 0.7,
+          },
+        });
       if (!map.getLayer("verified-main"))
         map.addLayer({
           id: "verified-main",
@@ -205,6 +267,63 @@ export function CampusMap({
             "line-color": "#182b49",
             "line-width": 7,
             "line-opacity": 0.9,
+          },
+        });
+      if (!map.getSource("route-segments"))
+        map.addSource("route-segments", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+      if (!map.getLayer("route-confirmed"))
+        map.addLayer({
+          id: "route-confirmed",
+          type: "line",
+          source: "route-segments",
+          filter: [
+            "all",
+            ["!=", ["get", "status"], "provisional"],
+            ["!=", ["get", "confidence"], "provisional"],
+            ["!=", ["get", "confidence"], "approximate"],
+          ],
+          paint: { "line-color": "#123a67", "line-width": 7 },
+        });
+      if (!map.getLayer("route-provisional"))
+        map.addLayer({
+          id: "route-provisional",
+          type: "line",
+          source: "route-segments",
+          filter: [
+            "any",
+            ["==", ["get", "status"], "provisional"],
+            ["==", ["get", "confidence"], "provisional"],
+            ["==", ["get", "confidence"], "approximate"],
+          ],
+          paint: {
+            "line-color": "#e09a22",
+            "line-width": 7,
+            "line-dasharray": [1.2, 1.2],
+          },
+        });
+      if (!map.getSource("route-approaches"))
+        map.addSource("route-approaches", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+      if (!map.getLayer("route-approaches"))
+        map.addLayer({
+          id: "route-approaches",
+          type: "circle",
+          source: "route-approaches",
+          paint: {
+            "circle-radius": 7,
+            "circle-color": [
+              "case",
+              ["boolean", ["get", "approximate"], false],
+              "#f2a51a",
+              "#1b6d55",
+            ],
+            "circle-stroke-color": "#fff",
+            "circle-stroke-width": 2,
           },
         });
       if (!map.getSource("selection-highlight"))
@@ -309,7 +428,13 @@ export function CampusMap({
     }
     const update = () => {
       const source = map.getSource("active-route") as GeoJSONSource | undefined;
-      source?.setData(route ?? emptyLine);
+      source?.setData(routeSegments ? emptyLine : (route ?? emptyLine));
+      (map.getSource("route-segments") as GeoJSONSource | undefined)?.setData(
+        routeSegments ?? { type: "FeatureCollection", features: [] },
+      );
+      (map.getSource("route-approaches") as GeoJSONSource | undefined)?.setData(
+        approachPoints ?? { type: "FeatureCollection", features: [] },
+      );
       if (route) {
         const bounds = new LngLatBounds();
         extendGeometry(bounds, route.geometry);
@@ -319,7 +444,7 @@ export function CampusMap({
     };
     if (map.loaded()) update();
     else map.once("load", update);
-  }, [start, destination, pending, route]);
+  }, [start, destination, pending, route, routeSegments, approachPoints]);
 
   return (
     <div className="campus-map-frame">
@@ -342,15 +467,19 @@ export function CampusMap({
       <div className="map-legend" aria-label="Map layers">
         <span>
           <i className="legend-main" />
-          Verified
+          Confirmed
         </span>
         <span>
           <i className="legend-shortcut" />
           Shortcut
         </span>
         <span>
+          <i className="legend-provisional" />
+          Suggested / provisional
+        </span>
+        <span>
           <i className="legend-reference" />
-          Reference only
+          Excluded / reference only
         </span>
       </div>
     </div>

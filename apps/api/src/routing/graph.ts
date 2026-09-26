@@ -17,6 +17,9 @@ export interface GraphArc {
   readonly toNodeId: string;
   readonly coordinates: readonly LonLat[];
   readonly cost: number;
+  readonly status: "confirmed" | "provisional";
+  readonly source: "editor" | "osm" | "query";
+  readonly sourceOsmId: string | null;
 }
 
 export interface RoutingGraph {
@@ -48,7 +51,15 @@ export function edgeEligibleForProfile(
   edge: RouteEdge,
   profile: TravelProfile,
 ): boolean {
-  return edge.kind === "main" || profile !== "wheelchair";
+  if (profile !== "wheelchair") return true;
+  return edge.kind === "main" && edge.wheelchairEligible !== false;
+}
+
+export function edgeIsRoutable(edge: RouteEdge): boolean {
+  if (edge.status === "draft") return false;
+  if (edge.status === "provisional")
+    return edge.source === "osm" && edge.verified === false;
+  return edge.status === "confirmed" ? edge.verified : edge.verified;
 }
 
 function finiteCoordinate(coordinate: LonLat): boolean {
@@ -67,13 +78,14 @@ function normalizedCoordinates(
   ]);
 }
 
-/** Builds solely from explicit, verified edges. OSM candidates are a different type and cannot enter here. */
+/** Builds a combined graph from confirmed editor edges and explicit provisional OSM edges. */
 export function buildRoutingGraph(input: {
   readonly nodes: readonly RouteNode[];
   readonly edges: readonly RouteEdge[];
   readonly profile: TravelProfile;
   readonly activeBlocks?: readonly ActiveBlock[];
   readonly endpointToleranceMetres?: number;
+  readonly provisionalPenaltyMetres?: number;
 }): RoutingGraph {
   const nodes = new Map<string, RouteNode>();
   for (const node of input.nodes) {
@@ -106,7 +118,7 @@ export function buildRoutingGraph(input: {
 
   for (const edge of input.edges) {
     if (
-      !edge.verified ||
+      !edgeIsRoutable(edge) ||
       blocked.has(edge.id) ||
       !edgeEligibleForProfile(edge, input.profile)
     )
@@ -140,7 +152,11 @@ export function buildRoutingGraph(input: {
     // Endpoint discrepancies within the editor tolerance are normalized to the shared node.
     // This guarantees exact GeoJSON continuity without inventing a topological connection.
     const coordinates = normalizedCoordinates(edge, from, to);
-    const cost = polylineLengthMetres(coordinates, projection);
+    const length = polylineLengthMetres(coordinates, projection);
+    const status = edge.status === "provisional" ? "provisional" : "confirmed";
+    const cost =
+      length +
+      (status === "provisional" ? (input.provisionalPenaltyMetres ?? 2) : 0);
     if (!(cost > 0))
       throw new InvalidGraphError(`Edge ${edge.id} has zero length`);
     edges.set(edge.id, edge);
@@ -151,6 +167,9 @@ export function buildRoutingGraph(input: {
         toNodeId: to.id,
         coordinates,
         cost,
+        status,
+        source: edge.source ?? (status === "provisional" ? "osm" : "editor"),
+        sourceOsmId: edge.sourceOsmId ?? null,
       }),
     );
     if (!edge.oneWay) {
@@ -161,6 +180,9 @@ export function buildRoutingGraph(input: {
           toNodeId: from.id,
           coordinates: Object.freeze([...coordinates].reverse()),
           cost,
+          status,
+          source: edge.source ?? (status === "provisional" ? "osm" : "editor"),
+          sourceOsmId: edge.sourceOsmId ?? null,
         }),
       );
     }

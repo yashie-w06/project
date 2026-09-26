@@ -53,7 +53,7 @@ export function validateFloorLayout(
           severity: "error",
           code: "door-parent-missing",
           featureId: feature.id,
-          message: `${feature.name || "Door"} is attached to a missing edge or room.`,
+          message: `${feature.name || "Door"} has an invalid edge attachment; place it again on a room side or exterior boundary.`,
         });
       }
       if (feature.isExit && layout.floor !== 0) {

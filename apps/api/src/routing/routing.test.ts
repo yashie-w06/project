@@ -148,6 +148,65 @@ test("multi-edge snapping ignores unverified graph material", () => {
   assert.equal(snapToVerifiedEdges(point, [edges[2]!], nodeMap, 10), null);
 });
 
+test("combined graph routes provisional OSM edges and returns provenance", () => {
+  const provisional: RouteEdge = {
+    ...edges[2]!,
+    id: "osm-edge:42:0-1",
+    status: "provisional",
+    source: "osm",
+    sourceOsmId: "42",
+  };
+  const graph = buildRoutingGraph({
+    nodes,
+    edges: [edges[0]!, provisional],
+    profile: "healthy",
+  });
+  const result = findRoute(graph, "a", "c");
+  assert.ok(result);
+  assert.equal(result.segments[0]?.status, "provisional");
+  assert.equal(result.segments[0]?.source, "osm");
+  assert.equal(result.segments[0]?.sourceOsmId, "42");
+  assert.equal(
+    snapToVerifiedEdges(
+      coordinate(0.0015),
+      [provisional],
+      new Map(nodes.map((node) => [node.id, node])),
+      2,
+    )?.edgeId,
+    provisional.id,
+  );
+});
+
+test("provisional steps are unavailable to wheelchair but ordinary map paths remain eligible", () => {
+  const path: RouteEdge = {
+    ...edges[2]!,
+    id: "osm-path",
+    status: "provisional",
+    source: "osm",
+    wheelchairEligible: true,
+  };
+  const steps: RouteEdge = {
+    ...path,
+    id: "osm-steps",
+    wheelchairEligible: false,
+  };
+  assert.ok(
+    findRoute(
+      buildRoutingGraph({ nodes, edges: [path], profile: "wheelchair" }),
+      "a",
+      "c",
+    ),
+  );
+  assert.equal(
+    findRoute(
+      buildRoutingGraph({ nodes, edges: [steps], profile: "wheelchair" }),
+      "a",
+      "c",
+    ),
+    null,
+  );
+});
+
 test("two interior snaps on the same edge produce only the partial continuous route", () => {
   let mutableNodes = nodes.slice(0, 2);
   let mutableEdges = [edges[0]!];

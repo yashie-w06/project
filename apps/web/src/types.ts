@@ -11,10 +11,15 @@ export type RouteEndpoint =
       exitDoorId?: string;
       entranceDoorId?: string;
       roomId?: string;
+      approachCoordinates?: Coordinate;
     };
 export interface CampusMapData {
   buildings: FeatureCollection<Polygon, { id: string; name: string }>;
   referencePaths: FeatureCollection<LineString>;
+  provisionalPaths: FeatureCollection<
+    LineString,
+    { id: string; sourceWayId: string; status: "provisional" }
+  >;
   verifiedPaths: FeatureCollection<
     LineString,
     { id: string; kind: "main" | "shortcut"; blocked: boolean }
@@ -42,18 +47,33 @@ export interface FloorDetails {
   connectors: FloorFeature[];
 }
 export type NoRouteCode =
-  | "NO_VERIFIED_PATHS"
+  | "NO_WALKABLE_GRAPH"
   | "START_UNREACHABLE"
   | "DEST_UNREACHABLE"
-  | "NO_LINKED_EXIT"
-  | "NO_LINKED_ENTRANCE"
+  | "NO_PLAUSIBLE_APPROACH"
   | "DIFFERENT_COMPONENTS"
   | "BLOCKED_OR_INELIGIBLE";
+export interface RouteSegment {
+  geometry: LineString;
+  source: "editor" | "osm" | "approach";
+  confidence: "confirmed" | "provisional" | "approximate";
+  sourceId?: string;
+}
+export interface RouteApproach {
+  role: "start" | "destination";
+  buildingId: string;
+  boundary: Coordinate;
+  network: Coordinate;
+  approximate: true;
+}
 export type RouteResponse =
   | {
       status: "ok";
       geometry: LineString;
       notices: string[];
+      segments: RouteSegment[];
+      approaches: RouteApproach[];
+      containsProvisional: boolean;
       selectedEntranceDoorId?: string;
       snaps?: Array<{
         original: Coordinate;

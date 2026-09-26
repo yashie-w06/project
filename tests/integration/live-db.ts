@@ -53,16 +53,42 @@ try {
   );
   assert.equal(counts.rows[0].buildings, 49);
   assert.equal(counts.rows[0].candidates, 15);
-  const honestNoRoute = await request(createApp(config, db))
+  const campusBuildings = await db.query(
+    "SELECT id,name FROM buildings WHERE name=ANY($1::text[])",
+    [["Central Library", "LT"]],
+  );
+  assert.equal(campusBuildings.rowCount, 2);
+  const campusBuildingId = new Map(
+    campusBuildings.rows.map((row) => [row.name as string, row.id as string]),
+  );
+  const provisionalCampusRoute = await request(createApp(config, db))
     .post("/api/route")
     .send({
       profile: "healthy",
-      start: { kind: "outdoor", coordinates: a },
-      destination: { kind: "outdoor", coordinates: c },
+      start: {
+        kind: "building",
+        buildingId: campusBuildingId.get("Central Library"),
+        floor: 0,
+      },
+      destination: {
+        kind: "building",
+        buildingId: campusBuildingId.get("LT"),
+        floor: 0,
+      },
     });
-  assert.equal(honestNoRoute.body.status, "no_route");
-  assert.equal(honestNoRoute.body.code, "NO_VERIFIED_PATHS");
-  assert.match(honestNoRoute.body.message, /^No verified route available/);
+  assert.equal(provisionalCampusRoute.body.status, "ok");
+  assert.equal(provisionalCampusRoute.body.containsProvisional, true);
+  assert.equal(provisionalCampusRoute.body.approaches.length, 2);
+  assert.deepEqual(
+    provisionalCampusRoute.body.segments
+      .filter((segment: { source: string }) => segment.source === "osm")
+      .map((segment: { sourceId: string }) => segment.sourceId),
+    ["202920189", "202920186"],
+  );
+  assert.match(
+    provisionalCampusRoute.body.notices.join(" "),
+    /not been field-verified/i,
+  );
   await db.query(
     "INSERT INTO route_nodes(id,longitude,latitude) VALUES($1,$2,$3),($4,$5,$6),($7,$8,$9)",
     [nodeA, ...a, nodeB, ...b, nodeC, ...c],
@@ -226,9 +252,12 @@ try {
     [pointId, floorId],
   );
   assert.deepEqual(persisted.rows[0], { point: 1, floor: 1 });
-  assert.equal((await request(app).get("/api/map")).status, 200);
+  const publicMap = await request(app).get("/api/map");
+  assert.equal(publicMap.status, 200);
+  assert.equal(publicMap.body.provisionalPaths.features.length, 12);
+  assert.equal(publicMap.body.referencePaths.features.length, 3);
   console.log(
-    "Live integration passed: counts, auth, persistence, restart, profiles, reports, block/unblock.",
+    "Live integration passed: provisional campus route, counts, auth, persistence, restart, profiles, reports, block/unblock.",
   );
 } finally {
   await cleanup();

@@ -208,8 +208,14 @@ export function doorLocalPoint(
   layout: Pick<FloorLayout, "boundary" | "features">,
 ): LocalPoint | undefined {
   const segment = doorParentSegment(door.parent, layout);
-  if (!segment) return undefined;
-  const position = clamp(door.position, 0, 1);
+  if (
+    !segment ||
+    !Number.isFinite(door.position) ||
+    door.position < 0 ||
+    door.position > 1
+  )
+    return undefined;
+  const position = door.position;
   return {
     x: segment.start.x + (segment.end.x - segment.start.x) * position,
     y: segment.start.y + (segment.end.y - segment.start.y) * position,

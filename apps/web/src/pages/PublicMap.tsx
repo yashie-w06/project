@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Feature, LineString } from "geojson";
+import type { Feature, FeatureCollection, LineString, Point } from "geojson";
 import { api } from "../api";
 import { CampusMap } from "../map/CampusMap";
 import type {
@@ -34,40 +34,119 @@ const profileLabels: Record<TravelProfile, string> = {
   heavy_luggage: "Heavy luggage",
 };
 const reasonText: Record<string, string> = {
-  NO_VERIFIED_PATHS:
-    "No verified route available. Walking routes have not been verified yet.",
+  NO_WALKABLE_GRAPH: "No mapped walking paths are available in this area yet.",
+  NO_VERIFIED_PATHS: "No mapped walking paths are available in this area yet.",
   START_UNREACHABLE:
-    "No verified route available. Start is not connected to a verified walking path; adjust it or choose a mapped exit.",
+    "No mapped walking path can be reached from this start; adjust the point or exit side.",
   DEST_UNREACHABLE:
-    "No verified route available. Destination is not connected to a verified walking path; adjust it or choose a mapped entrance.",
+    "No mapped walking path reaches this destination; adjust the point or entrance side.",
+  NO_PLAUSIBLE_APPROACH:
+    "Choose an entrance/exit side on the building boundary to continue.",
   NO_LINKED_EXIT:
-    "No verified route available. This building does not have a mapped route-ready exit yet.",
+    "Choose an entrance/exit side on the building boundary to continue.",
   NO_LINKED_ENTRANCE:
-    "No verified route available. This building does not have a mapped route-ready entrance yet.",
+    "Choose an entrance/exit side on the building boundary to continue.",
   DIFFERENT_COMPONENTS:
-    "No verified route available. No verified walking connection exists between these points yet.",
-  BLOCKED_OR_INELIGIBLE:
-    "No verified route available for this profile right now.",
+    "The mapped walking paths do not connect these points yet.",
+  BLOCKED_OR_INELIGIBLE: "No available route for this profile right now.",
 };
+
+type RouteSegment = {
+  geometry?: LineString;
+  coordinates?: Coordinate[];
+  status?: string;
+  confidence?: string;
+  source?: string;
+};
+type RouteApproach = {
+  coordinates?: Coordinate;
+  coordinate?: Coordinate;
+  boundary?: Coordinate;
+  role?: string;
+  approximate?: boolean;
+  label?: string;
+};
+
+export function routePresentation(response: unknown) {
+  const value = response as {
+    segments?: RouteSegment[];
+    approaches?: RouteApproach[];
+    approachPoints?: RouteApproach[];
+    selectedApproaches?: Record<string, RouteApproach | undefined>;
+  };
+  const segments: FeatureCollection<
+    LineString,
+    { confidence?: string; status?: string; source?: string }
+  > = {
+    type: "FeatureCollection",
+    features: (value.segments ?? []).flatMap((segment) => {
+      const geometry =
+        segment.geometry ??
+        (segment.coordinates
+          ? ({ type: "LineString", coordinates: segment.coordinates } as const)
+          : undefined);
+      return geometry
+        ? [
+            {
+              type: "Feature" as const,
+              properties: {
+                confidence: segment.confidence,
+                status: segment.status,
+                source: segment.source,
+              },
+              geometry,
+            },
+          ]
+        : [];
+    }),
+  };
+  const rawApproaches = [
+    ...(value.approaches ?? value.approachPoints ?? []),
+    ...Object.entries(value.selectedApproaches ?? {}).flatMap(([role, item]) =>
+      item ? [{ ...item, role: item.role ?? role }] : [],
+    ),
+  ];
+  const approaches: FeatureCollection<
+    Point,
+    { role?: string; approximate?: boolean; label?: string }
+  > = {
+    type: "FeatureCollection",
+    features: rawApproaches.flatMap((approach) => {
+      const coordinates =
+        approach.coordinates ?? approach.coordinate ?? approach.boundary;
+      return coordinates
+        ? [
+            {
+              type: "Feature" as const,
+              properties: {
+                role: approach.role,
+                approximate: approach.approximate,
+                label: approach.label,
+              },
+              geometry: { type: "Point" as const, coordinates },
+            },
+          ]
+        : [];
+    }),
+  };
+  return { segments, approaches };
+}
 
 export function visitorReason(reason: string) {
   const exact = reasonText[reason];
   if (exact) return exact;
   if (/not been verified|no verified paths/i.test(reason))
     return (
-      reasonText.NO_VERIFIED_PATHS ??
-      "Walking routes have not been verified yet."
+      reasonText.NO_VERIFIED_PATHS ?? "No mapped walking paths are available."
     );
   if (/cannot both connect|not within/i.test(reason))
-    return "No verified route available. One or both selected locations are not connected to a verified walking path.";
+    return "One or both selected locations cannot reach a mapped walking path; adjust the point or building side.";
   if (/disconnected/i.test(reason))
     return (
       reasonText.DIFFERENT_COMPONENTS ??
-      "No verified walking connection exists between these points yet."
+      "The mapped walking paths do not connect these points yet."
     );
-  return reason.startsWith("No verified route available")
-    ? reason
-    : "No verified route available for these locations.";
+  return reason || "No available route for these locations right now.";
 }
 
 export function PublicMap() {
@@ -79,6 +158,10 @@ export function PublicMap() {
   const [destination, setDestination] = useState<Choice>();
   const [profile, setProfile] = useState<TravelProfile>("healthy");
   const [route, setRoute] = useState<Feature<LineString>>();
+  const [routeSegments, setRouteSegments] =
+    useState<ReturnType<typeof routePresentation>["segments"]>();
+  const [approachPoints, setApproachPoints] =
+    useState<ReturnType<typeof routePresentation>["approaches"]>();
   const [messages, setMessages] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -89,6 +172,9 @@ export function PublicMap() {
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteCoordinate, setNoteCoordinate] = useState<Coordinate>();
   const [note, setNote] = useState("");
+  const [approachTarget, setApproachTarget] = useState<
+    "start" | "destination"
+  >();
 
   useEffect(() => {
     api
@@ -152,12 +238,36 @@ export function PublicMap() {
 
   function clearRouteFeedback() {
     setRoute(undefined);
+    setRouteSegments(undefined);
+    setApproachPoints(undefined);
     setMessages([]);
     setRequestError("");
   }
   function chooseMapCoordinate(coordinates: Coordinate) {
     if (noteOpen) {
       setNoteCoordinate(coordinates);
+      return;
+    }
+    if (approachTarget) {
+      const updateChoice = (choice: Choice | undefined) =>
+        choice
+          ? {
+              ...choice,
+              coordinate: coordinates,
+              context: `${choice.context} · chosen boundary approach`,
+              endpoint: {
+                ...choice.endpoint,
+                approachCoordinates: coordinates,
+              } as unknown as RouteEndpoint,
+            }
+          : choice;
+      if (approachTarget === "start") setStart(updateChoice);
+      else setDestination(updateChoice);
+      setApproachTarget(undefined);
+      clearRouteFeedback();
+      setMessages([
+        "Entrance/exit side selected. Find the route again to use this approximate approach.",
+      ]);
       return;
     }
     if (step === "profile") return;
@@ -291,19 +401,61 @@ export function PublicMap() {
         destination.endpoint,
       );
       if (response.status === "ok") {
+        setApproachTarget(undefined);
+        const presentation = routePresentation(response);
         setRoute({
           type: "Feature",
           properties: {},
           geometry: response.geometry,
         });
-        setMessages(response.notices);
+        setRouteSegments(
+          presentation.segments.features.length
+            ? presentation.segments
+            : undefined,
+        );
+        setApproachPoints(
+          presentation.approaches.features.length
+            ? presentation.approaches
+            : undefined,
+        );
+        const hasProvisional = presentation.segments.features.some(
+          ({ properties }) =>
+            properties.status === "provisional" ||
+            properties.confidence === "provisional" ||
+            properties.confidence === "approximate",
+        );
+        const hasApproximateApproach = presentation.approaches.features.some(
+          ({ properties }) => properties.approximate,
+        );
+        setMessages(
+          Array.from(
+            new Set([
+              ...(hasProvisional
+                ? [
+                    "Suggested route based on map data; paths and accessibility have not been field-verified.",
+                  ]
+                : []),
+              ...(hasApproximateApproach
+                ? ["Approximate approach; entrance is unconfirmed."]
+                : []),
+              ...response.notices,
+            ]),
+          ),
+        );
       } else {
-        const outcome = response as typeof response & {
+        const outcome = response as unknown as {
           code?: string;
           message?: string;
           reason?: string;
         };
         setRoute(undefined);
+        setRouteSegments(undefined);
+        setApproachPoints(undefined);
+        if (outcome.code === "NO_PLAUSIBLE_APPROACH") {
+          if (start.endpoint.kind === "building") setApproachTarget("start");
+          else if (destination.endpoint.kind === "building")
+            setApproachTarget("destination");
+        }
         setMessages([
           outcome.code
             ? visitorReason(outcome.code)
@@ -315,6 +467,8 @@ export function PublicMap() {
       }
     } catch (error) {
       setRoute(undefined);
+      setRouteSegments(undefined);
+      setApproachPoints(undefined);
       setRequestError(
         error instanceof Error
           ? error.message
@@ -356,18 +510,28 @@ export function PublicMap() {
             destination={confirmedDestinationCoordinate}
             pending={noteOpen ? noteCoordinate : pending?.coordinate}
             route={route}
+            routeSegments={routeSegments}
+            approachPoints={approachPoints}
             selectedBuildingId={selectedBuildingId}
             onPick={chooseMapCoordinate}
             onBuilding={chooseBuilding}
           />
           <div className="map-prompt">
-            <b>{noteOpen ? "Place your note" : instruction}</b>
+            <b>
+              {noteOpen
+                ? "Place your note"
+                : approachTarget
+                  ? "Choose an entrance/exit side"
+                  : instruction}
+            </b>
             <span>
               {noteOpen
                 ? noteCoordinate
                   ? "Marker placed — write the note in the panel."
                   : "Tap the issue location."
-                : prompt}
+                : approachTarget
+                  ? "Tap the outer boundary on the side facing a walking path."
+                  : prompt}
             </span>
           </div>
         </div>
@@ -534,9 +698,7 @@ export function PublicMap() {
                 disabled={!canRoute || routeLoading}
                 onClick={requestRoute}
               >
-                {routeLoading
-                  ? "Checking verified paths…"
-                  : "Find verified route"}
+                {routeLoading ? "Finding a route…" : "Find route"}
               </button>
               <button className="back" onClick={() => edit("destination")}>
                 ← Back to destination
@@ -582,6 +744,14 @@ export function PublicMap() {
               {messages.map((message, index) => (
                 <p key={index}>{message}</p>
               ))}
+              {approachTarget && (
+                <button
+                  className="approach-cancel"
+                  onClick={() => setApproachTarget(undefined)}
+                >
+                  Cancel side selection
+                </button>
+              )}
             </div>
           )}
           {requestError && (

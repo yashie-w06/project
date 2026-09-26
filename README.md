@@ -1,6 +1,6 @@
 # SGSITS Campus Access v2
 
-An editor-verified SGSITS walking map and limited indoor floor-layout prototype. The public app has exactly three routes: `/`, `/edit/login`, and protected `/edit`. OSM highway geometry is imported as reference material only; it never enters A* until an editor deliberately creates and publishes verified graph edges.
+An SGSITS walking map and indoor floor-layout prototype. The public app has exactly three routes: `/`, `/edit/login`, and protected `/edit`. Confirmed editor paths and conservatively eligible OSM geometry share one routing engine, but OSM-derived paths and approximate building approaches are always labelled provisional and unverified.
 
 ## Stack and workspace
 
@@ -8,7 +8,7 @@ An editor-verified SGSITS walking map and limited indoor floor-layout prototype.
 - `apps/api`: Express 5, TypeScript, PostgreSQL via `pg`, Zod, Jose, `fast-xml-parser`
 - Hosting target: Vercel for the SPA and Railway for the API plus one Railway PostgreSQL service
 
-The bundled `apps/api/data/campus.osm` is immutable source data. The deterministic importer finds 49 buildings and 15 highway reference candidates (60 adjacent pairs). The extract contains 12 `service`, two `tertiary`, and one `tertiary_link` ways, but no `footway`, `path`, or `pedestrian` ways. None are automatically trusted as walking routes.
+The bundled `apps/api/data/campus.osm` is immutable source data. The deterministic importer finds 49 buildings and 15 highway reference candidates (60 adjacent pairs). The extract contains 12 private campus `service`, two `tertiary`, and one `tertiary_link` ways, but no `footway`, `path`, or `pedestrian` ways. The service ways may support suggested provisional routes; arterial roads and reviewer-rejected/needs-edit geometry are excluded.
 
 ## Local setup
 
@@ -96,7 +96,7 @@ pnpm build
 pnpm test:e2e
 ```
 
-Focused tests cover deterministic OSM import, immutable candidates, metric snapping and edge splitting, verified-only A*, blocks, all three profiles, concave floor containment, doors/exits, connectors, API health/auth/validation, and desktop/mobile SPA flows. Database integration tests require a real PostgreSQL URL and are performed after migrations.
+Focused tests cover deterministic OSM import, provisional eligibility and provenance, metric snapping and edge splitting, confirmed/provisional graph composition, approximate approaches, blocks, all three profiles, concave floor containment, doors/exits, connectors, API health/auth/validation, and desktop/mobile SPA flows. Database integration tests require a real PostgreSQL URL and are performed after migrations.
 
 ## Accuracy and safety limits
 
@@ -104,8 +104,8 @@ Focused tests cover deterministic OSM import, immutable candidates, metric snapp
 - A building footprint is only an approximate initial floor outline.
 - Raster tiles are visual context, with OpenStreetMap attribution; they are never routing data.
 - Indoor features and vertical-access notices are informational. No indoor turn-by-turn route is fabricated.
-- The imported highway candidates require on-site/editor verification before any live route is published. An unavailable or disconnected verified graph correctly returns no route.
+- Suggested routes based on OSM service geometry are not field-verified and do not establish wheelchair accessibility. Rejected, needs-edit, forbidden, arterial, barrier-blocked, and building-crossing geometry is excluded.
 
-The current candidate checklist and exact endpoint coordinates are in [`docs/field-verification.md`](docs/field-verification.md). Until its internal paths are physically classified, the production graph must remain empty rather than fabricate coverage.
+The current candidate checklist and exact endpoint coordinates are in [`docs/field-verification.md`](docs/field-verification.md). A later campus walk can promote suitable geometry to confirmed paths without blocking provisional software deployment.
 
-The completed repair audit, root causes, live-data correction, browser coverage, and deployment handoff are documented in [`docs/repair-findings.md`](docs/repair-findings.md). The editor now supports map-first building/floor selection, reloadable versioned drafts, guarded exit linking, and alert resolution. Real campus locations remain intentionally unroutable until the separate field survey is completed.
+The completed repair audit, root causes, live-data correction, browser coverage, and deployment handoff are documented in [`docs/repair-findings.md`](docs/repair-findings.md). The editor supports map-first building/floor selection, reloadable versioned drafts, guarded exit linking, and alert resolution. Central Library to LT is the live provisional acceptance route.

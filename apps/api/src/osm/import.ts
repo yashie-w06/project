@@ -6,12 +6,24 @@ import { loadConfig } from "../config.js";
 import { createDatabase } from "../db.js";
 import type { OsmBuildingCandidate, OsmPathCandidate } from "./types.js";
 import { parseOsmImportModel } from "./parse.js";
+import {
+  buildProvisionalOsmGraph,
+  type OsmExclusionReason,
+} from "./provisional.js";
+
+export interface OsmImportEligibility {
+  readonly provisionalEligible: boolean;
+  readonly exclusionReason: OsmExclusionReason | null;
+}
 
 /** Adapter implemented by the database layer. Upserts must key on the stable IDs. */
 export interface OsmImportStore {
   transaction<T>(work: (store: OsmImportStore) => Promise<T>): Promise<T>;
   upsertBuilding(building: OsmBuildingCandidate): Promise<void>;
-  upsertPathCandidate(candidate: OsmPathCandidate): Promise<void>;
+  upsertPathCandidate(
+    candidate: OsmPathCandidate,
+    eligibility: OsmImportEligibility,
+  ): Promise<void>;
 }
 
 export async function importOsmXml(
@@ -23,11 +35,26 @@ export async function importOsmXml(
   pathSegmentCount: number;
 }> {
   const model = parseOsmImportModel(xml);
+  const provisional = buildProvisionalOsmGraph({
+    candidates: model.pathCandidates,
+    buildings: model.buildings,
+  });
+  const exclusions = new Map(
+    provisional.excluded.map(({ sourceWayId, reason }) => [
+      sourceWayId,
+      reason,
+    ]),
+  );
   await store.transaction(async (transaction) => {
     for (const building of model.buildings)
       await transaction.upsertBuilding(building);
-    for (const candidate of model.pathCandidates)
-      await transaction.upsertPathCandidate(candidate);
+    for (const candidate of model.pathCandidates) {
+      const exclusionReason = exclusions.get(candidate.sourceWayId) ?? null;
+      await transaction.upsertPathCandidate(candidate, {
+        provisionalEligible: exclusionReason === null,
+        exclusionReason,
+      });
+    }
   });
   return {
     buildingCount: model.buildings.length,
@@ -75,16 +102,51 @@ class ClientOsmImportStore implements OsmImportStore {
     );
   }
 
-  async upsertPathCandidate(candidate: OsmPathCandidate): Promise<void> {
+  async upsertPathCandidate(
+    candidate: OsmPathCandidate,
+    eligibility: OsmImportEligibility,
+  ): Promise<void> {
     await this.client.query(
-      `INSERT INTO osm_candidates(id,source_way_id,source_node_ids,coordinates,import_status,reviewer_decision)
-       VALUES($1,$2,$3::jsonb,$4::jsonb,'imported',NULL)
-       ON CONFLICT(source_way_id) DO NOTHING`,
+      `INSERT INTO osm_candidates(
+         id,source_way_id,source_node_ids,coordinates,import_status,reviewer_decision,
+         tags,provisional_eligible,provisional_exclusion_reason
+       )
+       VALUES($1,$2,$3::jsonb,$4::jsonb,'imported',NULL,$5::jsonb,$6,$7)
+       ON CONFLICT(source_way_id) DO UPDATE SET
+         source_node_ids=EXCLUDED.source_node_ids,
+         coordinates=EXCLUDED.coordinates,
+         tags=EXCLUDED.tags,
+         provisional_eligible=CASE
+           WHEN osm_candidates.reviewer_decision IN ('rejected','needs_edit') THEN false
+           ELSE EXCLUDED.provisional_eligible
+         END,
+         provisional_exclusion_reason=CASE
+           WHEN osm_candidates.reviewer_decision='rejected' THEN 'review_rejected'
+           WHEN osm_candidates.reviewer_decision='needs_edit' THEN 'review_needs_edit'
+           ELSE EXCLUDED.provisional_exclusion_reason
+         END,
+         version=osm_candidates.version+1,
+         updated_at=now()
+       WHERE osm_candidates.source_node_ids IS DISTINCT FROM EXCLUDED.source_node_ids
+          OR osm_candidates.coordinates IS DISTINCT FROM EXCLUDED.coordinates
+          OR osm_candidates.tags IS DISTINCT FROM EXCLUDED.tags
+          OR osm_candidates.provisional_eligible IS DISTINCT FROM
+             CASE WHEN osm_candidates.reviewer_decision IN ('rejected','needs_edit')
+               THEN false ELSE EXCLUDED.provisional_eligible END
+          OR osm_candidates.provisional_exclusion_reason IS DISTINCT FROM
+             CASE
+               WHEN osm_candidates.reviewer_decision='rejected' THEN 'review_rejected'
+               WHEN osm_candidates.reviewer_decision='needs_edit' THEN 'review_needs_edit'
+               ELSE EXCLUDED.provisional_exclusion_reason
+             END`,
       [
         candidate.id,
         candidate.sourceWayId,
         JSON.stringify(candidate.orderedNodeIds),
         JSON.stringify(candidate.coordinates),
+        JSON.stringify(candidate.tags),
+        eligibility.provisionalEligible,
+        eligibility.exclusionReason,
       ],
     );
   }

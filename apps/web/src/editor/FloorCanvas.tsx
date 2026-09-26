@@ -28,7 +28,7 @@ import {
   roomContainedInBoundary,
   squareContainedInBoundary,
 } from "./geometry";
-import { floorToMap, screenToFloorPoint } from "./transform";
+import { floorToMap, screenToFloorPoint, zoomViewAtPoint } from "./transform";
 import type {
   ConnectorPlacement,
   DoorFeature,
@@ -147,16 +147,20 @@ export function FloorCanvas({
   disabled = false,
   onLinkExit,
 }: FloorCanvasProps) {
+  const initialWidth = width ?? 920;
+  const initialHeight = height ?? 620;
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const historyRef = useRef<FloorLayout[]>([]);
   const panStartRef = useRef<View | null>(null);
+  const canvasSizeRef = useRef({ width: initialWidth, height: initialHeight });
+  const pinchRef = useRef<{ distance: number; centre: LocalPoint } | undefined>(
+    undefined,
+  );
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string>();
   const [preview, setPreview] = useState(false);
-  const initialWidth = width ?? 920;
-  const initialHeight = height ?? 620;
   const [view, setView] = useState<View>(() =>
     fitView(value, initialWidth, initialHeight),
   );
@@ -189,13 +193,30 @@ export function FloorCanvas({
 
   useEffect(() => {
     setView(fitView(value, canvasWidth, canvasHeight));
+    canvasSizeRef.current = { width: canvasWidth, height: canvasHeight };
     historyRef.current = [];
     setSelectedId(undefined);
-  }, [value.buildingId, value.floor]);
+  }, [value.buildingId, value.floor, value.localHeight, value.localWidth]);
 
   useEffect(() => {
-    setView(fitView(value, canvasWidth, canvasHeight));
-  }, [canvasHeight, canvasWidth, value.localHeight, value.localWidth]);
+    const previous = canvasSizeRef.current;
+    if (previous.width === canvasWidth && previous.height === canvasHeight)
+      return;
+    setView((current) => {
+      const centre = screenToFloorPoint(
+        { x: previous.width / 2, y: previous.height / 2 },
+        current,
+      );
+      return centre
+        ? {
+            ...current,
+            x: canvasWidth / 2 - centre.x * current.scale,
+            y: canvasHeight / 2 - centre.y * current.scale,
+          }
+        : fitView(value, canvasWidth, canvasHeight);
+    });
+    canvasSizeRef.current = { width: canvasWidth, height: canvasHeight };
+  }, [canvasHeight, canvasWidth, value]);
 
   useEffect(() => {
     const transformer = transformerRef.current;
@@ -293,20 +314,55 @@ export function FloorCanvas({
     const pointer = stage?.getPointerPosition();
     if (!stage || !pointer) return;
     const oldScale = view.scale;
-    const local = {
-      x: (pointer.x - view.x) / oldScale,
-      y: (pointer.y - view.y) / oldScale,
-    };
     const direction = event.evt.deltaY > 0 ? -1 : 1;
     const scale = Math.max(
       MIN_SCALE,
       Math.min(MAX_SCALE, oldScale * (direction > 0 ? 1.08 : 1 / 1.08)),
     );
-    setView({
-      scale,
-      x: pointer.x - local.x * scale,
-      y: pointer.y - local.y * scale,
-    });
+    const next = zoomViewAtPoint(view, pointer, scale);
+    if (next) setView(next);
+  };
+
+  const handleTouchMove = (event: Konva.KonvaEventObject<TouchEvent>) => {
+    if (event.evt.touches.length !== 2) return;
+    event.evt.preventDefault();
+    const stage = stageRef.current;
+    if (!stage) return;
+    stage.stopDrag();
+    const bounds = stage.container().getBoundingClientRect();
+    const first = event.evt.touches[0]!;
+    const second = event.evt.touches[1]!;
+    const centre = {
+      x: (first.clientX + second.clientX) / 2 - bounds.left,
+      y: (first.clientY + second.clientY) / 2 - bounds.top,
+    };
+    const distance = Math.hypot(
+      second.clientX - first.clientX,
+      second.clientY - first.clientY,
+    );
+    const previous = pinchRef.current;
+    pinchRef.current = { centre, distance };
+    if (!previous || previous.distance <= 0) return;
+    const current = {
+      x: stage.x(),
+      y: stage.y(),
+      scale: stage.scaleX(),
+    };
+    const translated = {
+      ...current,
+      x: current.x + centre.x - previous.centre.x,
+      y: current.y + centre.y - previous.centre.y,
+    };
+    const scale = Math.max(
+      MIN_SCALE,
+      Math.min(MAX_SCALE, current.scale * (distance / previous.distance)),
+    );
+    const next = zoomViewAtPoint(translated, centre, scale);
+    if (!next) return;
+    stage.position({ x: next.x, y: next.y });
+    stage.scale({ x: next.scale, y: next.scale });
+    stage.batchDraw();
+    setView(next);
   };
 
   const saveDraft = async () => {
@@ -450,6 +506,10 @@ export function FloorCanvas({
               scaleY={view.scale}
               draggable={!disabled && tool === "select"}
               onWheel={handleWheel}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={() => {
+                pinchRef.current = undefined;
+              }}
               onDragStart={(event) => {
                 if (event.target === event.target.getStage())
                   panStartRef.current = view;
@@ -472,6 +532,13 @@ export function FloorCanvas({
               onClick={(event) => {
                 const stage = event.target.getStage();
                 if (!stage || event.target !== stage) return;
+                const point = stagePoint(stage);
+                if (point) addAt(point);
+              }}
+              onTap={(event) => {
+                const stage = event.target.getStage();
+                if (!stage || event.target !== stage) return;
+                if (tool === "select") setSelectedId(undefined);
                 const point = stagePoint(stage);
                 if (point) addAt(point);
               }}
@@ -642,6 +709,7 @@ function FloorFeatureShape(props: ShapeProps) {
     onChange,
     onInvalid,
   } = props;
+  const [hovered, setHovered] = useState(false);
   const common = {
     id: `feature-${feature.id}`,
     onClick: (event: Konva.KonvaEventObject<MouseEvent>) => {
@@ -652,55 +720,62 @@ function FloorFeatureShape(props: ShapeProps) {
       event.cancelBubble = true;
       onSelect();
     },
+    onMouseEnter: () => setHovered(true),
+    onMouseLeave: () => setHovered(false),
   };
 
   if (feature.kind === "room") {
     const label = centredRoomLabel(feature);
     return (
-      <Group>
+      <Group
+        {...common}
+        x={feature.x}
+        y={feature.y}
+        draggable={!preview}
+        onDragMove={(event) => {
+          const resolved = containedRoomTranslation(
+            feature,
+            { x: event.target.x(), y: event.target.y() },
+            layout.boundary,
+          );
+          event.target.position(resolved);
+        }}
+        onDragEnd={(event) => {
+          onChange({ ...feature, x: event.target.x(), y: event.target.y() });
+        }}
+        onTransformEnd={(event) => {
+          const node = event.target;
+          const candidate = {
+            ...feature,
+            x: node.x(),
+            y: node.y(),
+            width: Math.max(3, feature.width * node.scaleX()),
+            height: Math.max(3, feature.height * node.scaleY()),
+          };
+          node.scale({ x: 1, y: 1 });
+          if (roomContainedInBoundary(candidate, layout.boundary))
+            onChange(candidate);
+          else {
+            node.position({ x: feature.x, y: feature.y });
+            onInvalid(
+              "The complete room must remain inside the floor boundary.",
+            );
+          }
+        }}
+      >
         <Rect
-          {...common}
-          x={feature.x}
-          y={feature.y}
+          x={0}
+          y={0}
           width={feature.width}
           height={feature.height}
           fill={selected && !preview ? "#dbeafe" : "#eef2ff"}
           stroke="#4f46e5"
           strokeWidth={1.4 / viewScale}
-          draggable={!preview}
-          onDragMove={(event) => {
-            const resolved = containedRoomTranslation(
-              feature,
-              { x: event.target.x(), y: event.target.y() },
-              layout.boundary,
-            );
-            event.target.position(resolved);
-          }}
-          onDragEnd={(event) => {
-            onChange({ ...feature, x: event.target.x(), y: event.target.y() });
-          }}
-          onTransformEnd={(event) => {
-            const node = event.target;
-            const candidate = {
-              ...feature,
-              x: node.x(),
-              y: node.y(),
-              width: Math.max(3, node.width() * node.scaleX()),
-              height: Math.max(3, node.height() * node.scaleY()),
-            };
-            node.scale({ x: 1, y: 1 });
-            if (roomContainedInBoundary(candidate, layout.boundary))
-              onChange(candidate);
-            else {
-              node.position({ x: feature.x, y: feature.y });
-              onInvalid(
-                "The complete room must remain inside the floor boundary.",
-              );
-            }
-          }}
         />
         <Text
           {...label}
+          x={label.x - feature.x}
+          y={label.y - feature.y}
           text={feature.name}
           align="center"
           verticalAlign="middle"
@@ -769,17 +844,10 @@ function FloorFeatureShape(props: ShapeProps) {
             listening={false}
           />
         )}
-        {selected && (
-          <Text
-            x={5}
-            y={feature.isExit ? 1 : -7}
-            width={Math.min(44, Math.max(16, feature.name.length * 3))}
-            height={11}
-            text={feature.name}
-            fontSize={4}
-            verticalAlign="middle"
-            fill="#0f172a"
-            listening={false}
+        {(selected || hovered) && (
+          <CompactNameBadge
+            name={feature.name}
+            offsetY={feature.isExit ? 7 : 0}
           />
         )}
       </Group>
@@ -848,19 +916,43 @@ function FloorFeatureShape(props: ShapeProps) {
           listening={false}
         />
       )}
-      {feature.kind === "point" && selected && (
-        <Text
-          x={5}
-          y={-8}
-          width={Math.min(44, Math.max(14, feature.name.length * 3))}
-          height={12}
-          text={feature.name}
-          fontSize={4}
-          verticalAlign="middle"
-          fill="#0f172a"
-          listening={false}
-        />
+      {feature.kind === "point" && (selected || hovered) && (
+        <CompactNameBadge name={feature.name} />
       )}
+    </Group>
+  );
+}
+
+function CompactNameBadge({
+  name,
+  offsetY = 0,
+}: {
+  name: string;
+  offsetY?: number;
+}) {
+  const width = Math.min(48, Math.max(18, name.length * 2.8));
+  return (
+    <Group x={-width / 2} y={-16 + offsetY} listening={false}>
+      <Rect
+        width={width}
+        height={10}
+        cornerRadius={2}
+        fill="rgba(255,255,255,0.94)"
+        stroke="#94a3b8"
+        strokeWidth={0.5}
+      />
+      <Text
+        x={2}
+        width={width - 4}
+        height={10}
+        text={name}
+        fontSize={4}
+        align="center"
+        verticalAlign="middle"
+        wrap="none"
+        ellipsis
+        fill="#0f172a"
+      />
     </Group>
   );
 }

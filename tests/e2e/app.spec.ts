@@ -20,6 +20,7 @@ const building = {
 const map = {
   buildings: { type: "FeatureCollection", features: [building] },
   referencePaths: emptyCollection,
+  provisionalPaths: emptyCollection,
   verifiedPaths: emptyCollection,
   points: emptyCollection,
   alerts: [],
@@ -49,11 +50,33 @@ async function mockApi(page: Page) {
     else if (url.pathname === "/api/editor/floors") body = { floors: [] };
     else if (url.pathname === "/api/route")
       body = {
-        status: "no_route",
-        code: "NO_VERIFIED_PATHS",
-        message:
-          "No verified route available. Walking routes have not been verified yet.",
-        notices: [],
+        status: "ok",
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [75.8712, 22.7262],
+            [75.8718, 22.7268],
+          ],
+        },
+        segments: [
+          {
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [75.8712, 22.7262],
+                [75.8718, 22.7268],
+              ],
+            },
+            source: "osm",
+            confidence: "provisional",
+            sourceId: "fixture-way",
+          },
+        ],
+        approaches: [],
+        containsProvisional: true,
+        notices: [
+          "Suggested route based on map data; paths and accessibility have not been field-verified.",
+        ],
       };
     else if (url.pathname === "/api/search")
       body = {
@@ -78,7 +101,7 @@ async function mockApi(page: Page) {
   });
 }
 
-test("public wizard confirms stable results and reports honest no-route", async ({
+test("public wizard confirms stable results and labels a provisional route", async ({
   page,
 }, testInfo) => {
   await mockApi(page);
@@ -93,10 +116,10 @@ test("public wizard confirms stable results and reports honest no-route", async 
   await search.fill("Test");
   await page.getByRole("button", { name: /Test Building/ }).click();
   await page.getByRole("button", { name: /Confirm destination/i }).click();
-  await page.getByRole("button", { name: /Find verified route/i }).click();
-  await expect(page.getByText(/No verified route available/i)).toBeVisible();
+  await page.getByRole("button", { name: /^Find route$/i }).click();
+  await expect(page.getByText(/not been field-verified/i)).toBeVisible();
   await page.screenshot({
-    path: `test-results/${testInfo.project.name}-public-no-route.png`,
+    path: `test-results/${testInfo.project.name}-public-provisional-route.png`,
     fullPage: true,
   });
 });

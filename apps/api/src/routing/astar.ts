@@ -8,6 +8,15 @@ export interface RouteResult {
   readonly edgeIds: readonly string[];
   readonly geometry: Readonly<LineString>;
   readonly internalCostMetres: number;
+  readonly segments: readonly RouteSegment[];
+}
+
+export interface RouteSegment {
+  readonly edgeId: string;
+  readonly status: "confirmed" | "provisional";
+  readonly source: "editor" | "osm" | "query";
+  readonly sourceOsmId: string | null;
+  readonly geometry: Readonly<LineString>;
 }
 
 function reconstruct(
@@ -58,6 +67,23 @@ function reconstruct(
       ]),
     }),
     internalCostMetres: cost,
+    segments: Object.freeze(
+      arcs.map((arc) =>
+        Object.freeze({
+          edgeId: arc.edgeId,
+          status: arc.status,
+          source: arc.source,
+          sourceOsmId: arc.sourceOsmId,
+          geometry: Object.freeze({
+            type: "LineString" as const,
+            coordinates: arc.coordinates.map(([longitude, latitude]) => [
+              longitude,
+              latitude,
+            ]),
+          }),
+        }),
+      ),
+    ),
   });
 }
 

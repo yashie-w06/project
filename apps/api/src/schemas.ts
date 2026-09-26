@@ -19,6 +19,7 @@ export const endpointSchema = z.discriminatedUnion("kind", [
     exitDoorId: z.string().min(1).optional(),
     entranceDoorId: z.string().min(1).optional(),
     roomId: z.string().min(1).optional(),
+    approachCoordinates: coordinateSchema.optional(),
   }),
 ]);
 export const routeRequestSchema = z.object({

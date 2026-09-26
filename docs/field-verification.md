@@ -1,8 +1,8 @@
 # SGSITS outdoor route field verification
 
-The importer deliberately keeps every row below out of the routing graph. Do not approve from aerial imagery alone. Walk the complete geometry shown by the OSM way link and record one decision:
+The importer classifies suitable campus service geometry for clearly labelled **provisional** routing. It does not approve or field-verify any row. Do not approve from aerial imagery alone. Walk the complete geometry shown by the OSM way link and record one decision:
 
-**Deployment status:** deferred by the project owner. All `UNVERIFIED` rows remain unapproved, are excluded from public A*, and produce an honest “No verified route available” state until a later on-site survey.
+**Deployment status:** the physical survey is deferred by the project owner. Eligible `UNVERIFIED` service ways may appear in public A* only as dashed suggested/provisional map data with an explicit warning. They remain unconfirmed and have no field-verified accessibility claim. Rejected and `needs_edit` rows are excluded. Locations outside the eligible connected graph show “No verified route available.”
 
 - `main`: continuous ordinary outdoor walking surface, including wheelchair use for this prototype.
 - `shortcut`: physically walkable unofficial shortcut; excluded from wheelchair routing.

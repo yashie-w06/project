@@ -99,6 +99,13 @@
 .note-toggle {
   width: 100%;
 }
+.approach-cancel {
+  border: 1px solid #a66b13;
+  border-radius: 7px;
+  background: #fff;
+  color: #70430b;
+  padding: 7px 9px;
+}
 .route-controls .back,
 .choice-step > .back {
   margin-top: 8px;

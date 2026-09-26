@@ -175,6 +175,20 @@ export function extractOsmImportModel(extract: OsmExtract): OsmImportModel {
           orderedNodeIds: way.nodeIds,
           coordinates,
           tags: way.tags,
+          barrierNodeIds: Object.freeze(
+            way.nodeIds.filter((nodeId) => {
+              const tags = extract.nodes.get(nodeId)?.tags;
+              return Boolean(
+                tags?.barrier &&
+                !["entrance", "gate", "lift_gate", "sally_port"].includes(
+                  tags.barrier,
+                ) &&
+                !["yes", "permissive", "designated"].includes(
+                  tags.foot ?? tags.access ?? "",
+                ),
+              );
+            }),
+          ),
           importStatus: "imported",
           reviewerDecision: "pending",
           geometry,

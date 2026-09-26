@@ -7,10 +7,34 @@ export function screenToFloorPoint(
   point: LocalPoint,
   view: CanvasViewTransform,
 ): LocalPoint | undefined {
-  if (!Number.isFinite(view.scale) || view.scale <= 0) return undefined;
+  if (
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    !Number.isFinite(view.x) ||
+    !Number.isFinite(view.y) ||
+    !Number.isFinite(view.scale) ||
+    view.scale <= 0
+  )
+    return undefined;
   return {
     x: (point.x - view.x) / view.scale,
     y: (point.y - view.y) / view.scale,
+  };
+}
+
+/** Keeps the same floor point under the pointer while changing zoom. */
+export function zoomViewAtPoint(
+  view: CanvasViewTransform,
+  pointer: LocalPoint,
+  nextScale: number,
+): CanvasViewTransform | undefined {
+  if (!Number.isFinite(nextScale) || nextScale <= 0) return undefined;
+  const local = screenToFloorPoint(pointer, view);
+  if (!local) return undefined;
+  return {
+    scale: nextScale,
+    x: pointer.x - local.x * nextScale,
+    y: pointer.y - local.y * nextScale,
   };
 }
 

@@ -1,6 +1,10 @@
 import type { LonLat } from "../osm/types.js";
 import { createLocalProjection, type LocalProjection } from "./projection.js";
-import { edgeEligibleForProfile, effectiveBlockedEdgeIds } from "./graph.js";
+import {
+  edgeEligibleForProfile,
+  edgeIsRoutable,
+  effectiveBlockedEdgeIds,
+} from "./graph.js";
 import type {
   ActiveBlock,
   RouteEdge,
@@ -115,7 +119,7 @@ export function snapToVerifiedEdges(
   let best: SegmentSnap | null = null;
   for (const edge of edges) {
     if (
-      !edge.verified ||
+      !edgeIsRoutable(edge) ||
       blocked.has(edge.id) ||
       (options.profile && !edgeEligibleForProfile(edge, options.profile))
     )
@@ -133,6 +137,9 @@ export function snapToVerifiedEdges(
   }
   return best;
 }
+
+/** Preferred name: provisional OSM edges are eligible too. */
+export const snapToEligibleEdges = snapToVerifiedEdges;
 
 /** Pure helper; callers persist node creation, edge replacement, and attachments atomically. */
 export function splitEdgeAtSnap(
@@ -166,6 +173,10 @@ export function splitEdgeAtSnap(
     blocked: edge.blocked,
     oneWay: edge.oneWay,
     sourceOsmId: edge.sourceOsmId,
+    status: edge.status,
+    source: edge.source,
+    osmHighway: edge.osmHighway,
+    wheelchairEligible: edge.wheelchairEligible,
   } as const;
   const firstEdge: RouteEdge = Object.freeze({
     ...common,

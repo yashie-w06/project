@@ -4,6 +4,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { importOsmXml, type OsmImportStore } from "./import.js";
 import { parseOsmImportModel, parseOsmXml } from "./parse.js";
+import {
+  buildProvisionalOsmGraph,
+  osmWalkingEligibility,
+  polylineCrossesBuildingInterior,
+} from "./provisional.js";
 import type { OsmBuildingCandidate, OsmPathCandidate } from "./types.js";
 
 const fixturePath = fileURLToPath(
@@ -87,4 +92,106 @@ test("raw parse model is immutable at its public collection boundaries", () => {
   assert.ok(Object.isFrozen(parsed));
   assert.ok(Object.isFrozen(parsed.ways));
   assert.ok(Object.isFrozen(parsed.nodes.get("1")));
+});
+
+test("walking eligibility is conservative about access, roads, and steps", () => {
+  assert.deepEqual(osmWalkingEligibility({ highway: "footway" }), {
+    eligible: true,
+    wheelchairEligible: true,
+  });
+  assert.deepEqual(osmWalkingEligibility({ highway: "steps" }), {
+    eligible: true,
+    wheelchairEligible: false,
+  });
+  assert.equal(osmWalkingEligibility({ highway: "service" }).eligible, false);
+  assert.equal(
+    osmWalkingEligibility({ highway: "service", foot: "designated" }).eligible,
+    true,
+  );
+  assert.equal(
+    osmWalkingEligibility({ highway: "service", access: "private" }).eligible,
+    true,
+  );
+  assert.equal(
+    osmWalkingEligibility({ highway: "path", access: "private" }).eligible,
+    false,
+  );
+});
+
+test("provisional graph splits deterministically only at shared OSM nodes", () => {
+  const xml = `<osm version="0.6">
+    <node id="1" lat="22" lon="75"/><node id="2" lat="22" lon="75.001"/>
+    <node id="3" lat="22" lon="75.002"/><node id="4" lat="21.999" lon="75.001"/>
+    <node id="5" lat="22.001" lon="75.0015"/><node id="6" lat="21.999" lon="75.0015"/>
+    <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><tag k="highway" v="footway"/></way>
+    <way id="11"><nd ref="4"/><nd ref="2"/><tag k="highway" v="path"/></way>
+    <way id="12"><nd ref="5"/><nd ref="6"/><tag k="highway" v="footway"/></way>
+  </osm>`;
+  const model = parseOsmImportModel(xml);
+  const first = buildProvisionalOsmGraph({ candidates: model.pathCandidates });
+  const second = buildProvisionalOsmGraph({ candidates: model.pathCandidates });
+  assert.deepEqual(first, second);
+  assert.deepEqual(
+    first.edges.map((edge) => edge.id),
+    [
+      "osm-edge:10:0-1",
+      "osm-edge:10:1-2",
+      "osm-edge:11:0-1",
+      "osm-edge:12:0-1",
+    ],
+  );
+  assert.equal(
+    first.nodes.some((node) => node.id === "osm-node:2"),
+    true,
+  );
+  // Way 12 crosses way 10 geometrically, but has no shared source node.
+  assert.equal(
+    first.nodes.some((node) => node.id.includes("intersection")),
+    false,
+  );
+});
+
+test("review decisions, barriers, and building interiors exclude provisional ways", () => {
+  const xml = `<osm version="0.6">
+    <node id="1" lat="0" lon="-1"/><node id="2" lat="0" lon="1"/>
+    <node id="3" lat="2" lon="-1"/><node id="4" lat="2" lon="1"><tag k="barrier" v="wall"/></node>
+    <node id="5" lat="3" lon="-1"/><node id="6" lat="3" lon="1"/>
+    <way id="10"><nd ref="1"/><nd ref="2"/><tag k="highway" v="footway"/></way>
+    <way id="11"><nd ref="3"/><nd ref="4"/><tag k="highway" v="path"/></way>
+    <way id="12"><nd ref="5"/><nd ref="6"/><tag k="highway" v="footway"/></way>
+  </osm>`;
+  const candidates = parseOsmImportModel(xml).pathCandidates;
+  const footprint = {
+    type: "Feature" as const,
+    properties: {},
+    geometry: {
+      type: "Polygon" as const,
+      coordinates: [
+        [
+          [-0.5, -0.5],
+          [0.5, -0.5],
+          [0.5, 0.5],
+          [-0.5, 0.5],
+          [-0.5, -0.5],
+        ],
+      ],
+    },
+  };
+  assert.equal(
+    polylineCrossesBuildingInterior(candidates[0]!.coordinates, footprint),
+    true,
+  );
+  const graph = buildProvisionalOsmGraph({
+    candidates,
+    buildings: [
+      { id: "b", sourceWayId: "b", name: null, levels: null, footprint },
+    ],
+    decisions: new Map([["12", "needs_edit"]]),
+  });
+  assert.equal(graph.edges.length, 0);
+  assert.deepEqual(graph.excluded, [
+    { sourceWayId: "10", reason: "crosses_building" },
+    { sourceWayId: "11", reason: "blocked_by_barrier" },
+    { sourceWayId: "12", reason: "review_needs_edit" },
+  ]);
 });
