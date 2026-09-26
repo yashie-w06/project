@@ -47,9 +47,9 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
       const source=edges.find(e=>e.id===snap.edgeId)!;const nodeId=`route-pick-${role}-${randomUUID()}`;const split=splitEdgeAtSnap(source,snap,nodeId,`${source.id}-${role}-a-${randomUUID()}`,`${source.id}-${role}-b-${randomUUID()}`);edges=edges.filter(e=>e.id!==source.id);edges.push(...split.edges);nodes.push(split.node);return nodeId;
     }
     const startId=await resolveEndpoint(start,"start");const destinationId=await resolveEndpoint(destination,"destination");
-    if(!startId||!destinationId)return {status:"no_route" as const,reason:"The selected locations cannot both connect to the verified walking graph.",notices};
-    let graph;try{graph=buildRoutingGraph({nodes,edges,profile});}catch{return {status:"no_route" as const,reason:"The verified graph currently contains an invalid or disconnected edit.",notices};}
-    const route=findRoute(graph,startId,destinationId);if(!route)return {status:"no_route" as const,reason:"No verified route connects these locations for the selected profile.",notices};
+    if(!startId||!destinationId)return {status:"no_route" as const,reason:"No verified route available: the selected locations cannot both connect to the verified walking graph.",notices};
+    let graph;try{graph=buildRoutingGraph({nodes,edges,profile});}catch{return {status:"no_route" as const,reason:"No verified route available: the verified graph contains an invalid or disconnected edit.",notices};}
+    const route=findRoute(graph,startId,destinationId);if(!route)return {status:"no_route" as const,reason:"No verified route available for the selected locations and travel profile.",notices};
     notices.push(...snaps.map(s=>`A selected outdoor point was snapped ${s.distanceMetres.toFixed(1)} m to the verified path; the correction is shown on the map.`));
     const selectedEntranceDoorId=destination.kind==="building"?destination.entranceDoorId:undefined;
     return {status:"ok" as const,geometry:route.geometry as LineString,notices,selectedEntranceDoorId,snaps};

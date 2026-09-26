@@ -1,13 +1,14 @@
 {
   "name": "sgsits-campus-access-v2",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@12.4.2",
   "scripts": {
     "dev": "pnpm --parallel --filter @campus-access/api --filter @campus-access/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test:unit": "pnpm -r test:unit",
-    "test:integration": "vitest run tests/integration",
+    "test:integration": "pnpm --filter @campus-access/api test:integration",
     "test:e2e": "playwright test",
     "qa": "pnpm typecheck && pnpm test:unit && pnpm build",
     "format:check": "prettier --check .",
@@ -16,10 +17,12 @@
   "devDependencies": {
     "@playwright/test": "^1.55.1",
     "@types/node": "^24.5.2",
+    "@types/supertest": "^6.0.3",
     "@typescript-eslint/eslint-plugin": "^8.44.1",
     "@typescript-eslint/parser": "^8.44.1",
     "eslint": "^9.36.0",
     "prettier": "^3.6.2",
+    "supertest": "^7.1.4",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   }

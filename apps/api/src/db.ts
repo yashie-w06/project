@@ -7,7 +7,7 @@ export function createDatabase(config: Config): Database {
   return new pg.Pool({
     connectionString: config.DATABASE_URL,
     max: config.NODE_ENV === "production" ? 10 : 4,
-    connectionTimeoutMillis: 4_000,
+    connectionTimeoutMillis: 15_000,
     idleTimeoutMillis: 30_000,
     ssl: config.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
   });

@@ -73,7 +73,7 @@ Editor login uses `POST /api/editor/login`. Send its short-lived token as `Autho
 
 1. Create a Railway project and add PostgreSQL.
 2. Add this GitHub repository as a service. Keep the service root at repository root `/` so the workspace lockfile is available; Railway reads `railway.toml`.
-3. Set `DATABASE_URL` to a Railway variable reference to the PostgreSQL service (not the public URL), plus `EDITOR_EMAIL`, `EDITOR_PASSWORD_HASH`, `EDITOR_TOKEN_SECRET`, and the exact Vercel origin in `WEB_ORIGIN`. Do not set `PORT` manually.
+3. Set the API service's `DATABASE_URL` to the Railway reference `${{Postgres.DATABASE_URL}}` (adjust `Postgres` only if the database service has a different name), not to the public proxy URL. Also set `EDITOR_EMAIL`, `EDITOR_PASSWORD_HASH` or `EDITOR_PASSWORD`, `EDITOR_TOKEN_SECRET`, and the exact Vercel origin in `WEB_ORIGIN`. Do not set `PORT` manually.
 4. The build runs the API TypeScript build. Pre-deploy runs controlled SQL migrations and the idempotent OSM import. Start runs the compiled Express server.
 5. Generate a public Railway domain and verify `https://<domain>/api/health` reports both values ready.
 
@@ -105,3 +105,5 @@ Focused tests cover deterministic OSM import, immutable candidates, metric snapp
 - Raster tiles are visual context, with OpenStreetMap attribution; they are never routing data.
 - Indoor features and vertical-access notices are informational. No indoor turn-by-turn route is fabricated.
 - The imported highway candidates require on-site/editor verification before any live route is published. An unavailable or disconnected verified graph correctly returns no route.
+
+The current candidate checklist and exact endpoint coordinates are in [`docs/field-verification.md`](docs/field-verification.md). Until its internal paths are physically classified, the production graph must remain empty rather than fabricate coverage.
