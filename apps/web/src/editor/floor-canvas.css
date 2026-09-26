@@ -1,0 +1,137 @@
+.floor-editor {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  color: #172033;
+  font: 500 0.875rem/1.4 system-ui, sans-serif;
+}
+
+.floor-editor button,
+.floor-editor input,
+.floor-editor select {
+  font: inherit;
+}
+
+.floor-editor__toolbar,
+.floor-editor__preview-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.floor-editor__toolbar button,
+.floor-editor__preview-banner button,
+.floor-editor__inspector button {
+  border: 1px solid #cbd5e1;
+  border-radius: 0.45rem;
+  background: white;
+  color: #1e293b;
+  cursor: pointer;
+  padding: 0.42rem 0.7rem;
+}
+
+.floor-editor__toolbar button.is-active {
+  border-color: #4f46e5;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.floor-editor__toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.floor-editor__toolbar-spacer {
+  flex: 1 1 1rem;
+}
+
+.floor-editor__canvas {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background-color: #e2e8f0;
+  background-image: linear-gradient(#cbd5e1 1px, transparent 1px),
+    linear-gradient(90deg, #cbd5e1 1px, transparent 1px);
+  background-size: 24px 24px;
+  box-shadow: inset 0 1px 3px rgb(15 23 42 / 0.08);
+  touch-action: none;
+}
+
+.floor-editor__preview-banner {
+  justify-content: space-between;
+  border-radius: 0.55rem;
+  background: #ecfeff;
+  color: #155e75;
+  padding: 0.55rem 0.75rem;
+}
+
+.floor-editor__inspector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.65rem;
+  border: 1px solid #dbe3ef;
+  border-radius: 0.65rem;
+  background: #f8fafc;
+  padding: 0.75rem;
+}
+
+.floor-editor__inspector label {
+  display: grid;
+  gap: 0.2rem;
+  color: #475569;
+  font-size: 0.78rem;
+}
+
+.floor-editor__inspector input:not([type="checkbox"]),
+.floor-editor__inspector select {
+  min-width: 10rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.35rem;
+  background: white;
+  padding: 0.4rem 0.5rem;
+}
+
+.floor-editor__inspector .floor-editor__check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.45rem;
+}
+
+.floor-editor__hint {
+  max-width: 24rem;
+  color: #92400e;
+}
+
+.floor-editor__inspector .floor-editor__delete {
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.floor-editor__issues {
+  border-left: 3px solid #f59e0b;
+  background: #fffbeb;
+  padding: 0.45rem 0.75rem;
+}
+
+.floor-editor__issues p {
+  margin: 0.2rem 0;
+}
+
+.floor-editor__issues p[data-severity="error"] {
+  color: #b91c1c;
+}
+
+@media (max-width: 700px) {
+  .floor-editor__toolbar-spacer {
+    display: none;
+  }
+
+  .floor-editor__canvas {
+    width: 100% !important;
+  }
+}
