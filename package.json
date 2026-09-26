@@ -6,7 +6,7 @@
     "dev": "pnpm --parallel --filter @campus-access/api --filter @campus-access/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test:unit": "vitest run",
+    "test:unit": "pnpm -r test:unit",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
     "qa": "pnpm typecheck && pnpm test:unit && pnpm build",

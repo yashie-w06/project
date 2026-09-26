@@ -1,6 +1,8 @@
 import express, { type ErrorRequestHandler } from "express";
 import cors from "cors";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import type { LineString } from "geojson";
 import { loadConfig, type Config } from "./config.js";
 import { checkDatabase, createDatabase, type Database } from "./db.js";
@@ -62,7 +64,7 @@ export function createApp(config:Config=loadConfig(),db:Database=createDatabase(
   const errors:ErrorRequestHandler=(error,_req,res,_next)=>{console.error(config.NODE_ENV==="production"?"Request failed":error);res.status(500).json({error:"Internal server error"});};app.use(errors);return app;
 }
 
-if(process.env.NODE_ENV!=="test"){
+if(process.argv[1] && fileURLToPath(import.meta.url)===resolve(process.argv[1])){
   const config=loadConfig();const db=createDatabase(config);const app=createApp(config,db);const server=app.listen(config.PORT,"0.0.0.0",()=>console.log(`API listening on port ${config.PORT}`));
   const close=()=>server.close(()=>db.end().finally(()=>process.exit(0)));process.on("SIGTERM",close);process.on("SIGINT",close);
 }
