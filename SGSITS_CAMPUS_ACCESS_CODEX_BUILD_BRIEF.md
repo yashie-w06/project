@@ -29,6 +29,7 @@ VITE_API_URL=http://localhost:3001
 ## 1. Agent roles and token discipline
 
 Spawn **two bounded subagents**, with nonoverlapping ownership:
+
 - **OSM/routing subagent:** inspect the provided extract and screenshots/context, implement importer/graph/routing modules and focused graph tests. Own only `apps/api/src/osm/**`, `apps/api/src/routing/**`, and their tests. Report factual data limitations concisely.
 - **Floor editor subagent:** implement the limited React Konva floor editor and focused editor tests. Own only `apps/web/src/editor/**` and its tests.
 - **Main agent:** own workspace setup, SQL schema/migrations, Express endpoints/auth, public map/user flow, outdoor editor, deployment configuration, and integration. Integrate both subagent outputs; do not have agents edit the same file. Keep at most these two subagents active. Give each the requirements from this document relevant to its ownership.
@@ -46,6 +47,7 @@ Keep raw OSM immutable. Static building polygons and names may be imported, but 
 ## 3. Pages and public flow
 
 Only three page routes:
+
 - `/` — public campus map and route form, building/floor side panel, and issue/note submission.
 - `/edit/login` — designated editor login.
 - `/edit` — protected editor with map, outdoor tools, building/floor editor, visitor messages, and alerts. No separate building page; use a side panel.
@@ -72,11 +74,13 @@ Exactly three choices: **Healthy**, **Wheelchair**, **Heavy luggage**.
 ## 5. Editor interactions — exact scope
 
 **Outdoor editor**:
+
 - Search or click a building, or click the outdoor map to place a small draggable named special point. Save exact lat/lon; GeoJSON uses `[longitude, latitude]`.
 - A route-drawing tool creates a polyline from short connected segments with movable vertices. Endpoints snap visibly to existing verified path nodes/segments. The editor can classify and save it as `main` or `shortcut`. New detached lines remain drafts/nonroutable until connected. Allow editing and removing lines and correcting/approving OSM reference candidates. Distinguish a route's visual crossing from a real junction.
 - The editor receives visitor messages with location and description. They may publish an alert marker visible to all. A blocking alert requires the editor to select the exact affected path edge(s); the graph excludes them immediately. A normal alert has no routing effect. The editor can unblock or remove the alert. No ticket workflow.
 
 **Interior editor**: select building by map click or search, select floor, then open a bounded floor canvas. Limit drawable component types to the later agreed list below (do not reintroduce generic triangles/circles/polygons):
+
 - Named **rectangular room**; drag/resize within the floor boundary.
 - **Door** dragged from toolbar onto a room side or building outer boundary; snap to that edge, persist parent edge/space and position. Only a **ground-floor door on the outer building boundary** exposes “Mark as exit.” A marked exit must have outdoor coordinates and a selected verified main path connection before it can be used for routing. A room door or upper-floor door cannot be marked exit.
 - Named small **special-point dot**, with floor-local coordinates.
@@ -119,20 +123,21 @@ sgsits-campus-access-v2/
 
 One PostgreSQL database. Use migration SQL with primary/foreign keys, checks, and indexes. Minimum persisted entities:
 
-| Entity | Required fields |
-| --- | --- |
-| buildings | stable OSM/string ID, name, footprint GeoJSON, optional mapped level count |
-| floors | building ID + floor number, editable boundary, draft/published layout version |
+| Entity         | Required fields                                                                                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| buildings      | stable OSM/string ID, name, footprint GeoJSON, optional mapped level count                                                                                                      |
+| floors         | building ID + floor number, editable boundary, draft/published layout version                                                                                                   |
 | floor_features | stable ID, building/floor, kind (room/door/point/stairs/lift), name, local geometry, door parent/edge, connector ID, exit flag, optional outdoor position and linked graph node |
-| outdoor_points | ID, name, longitude/latitude as double precision |
-| route_nodes | ID, longitude/latitude |
-| route_edges | ID, from/to node IDs, polyline coordinates, `main` or `shortcut`, verified flag, blocked flag, optional source OSM ID |
-| messages | ID, longitude/latitude, description, created timestamp; no user-facing status |
-| alerts | ID, longitude/latitude, description, active flag, affected route-edge IDs |
+| outdoor_points | ID, name, longitude/latitude as double precision                                                                                                                                |
+| route_nodes    | ID, longitude/latitude                                                                                                                                                          |
+| route_edges    | ID, from/to node IDs, polyline coordinates, `main` or `shortcut`, verified flag, blocked flag, optional source OSM ID                                                           |
+| messages       | ID, longitude/latitude, description, created timestamp; no user-facing status                                                                                                   |
+| alerts         | ID, longitude/latitude, description, active flag, affected route-edge IDs                                                                                                       |
 
 Store structured coordinates as JSONB where appropriate; never use one database row per map pixel. Use transactions for endpoint snaps/edge splits, exit linking, and block changes. Validate all payloads with Zod and reject invalid ranges, off-boundary room shapes, invalid exit placement, and unauthorized writes. Allow incomplete stairs/lift placements and detached lines to persist as **drafts with warnings**. Reject missing served-floor matches or dangling route endpoints only when publishing them as route-compatible/verified; drafts never enter A*. Keep editor auth on the API with a signed short-lived token; the editor credentials and signing secret are server environment variables. Rate limit login and public message submission. Never expose `DATABASE_URL` to the frontend.
 
 Minimum API endpoints (use the JSON contracts below and document examples in README):
+
 - Public: `GET /api/health`, `GET /api/map`, `GET /api/buildings` and floor details, `GET /api/search?q=`, `POST /api/route` with confirmed start/destination/profile, `POST /api/messages`.
 - Editor: `POST /api/editor/login`; authenticated list/save/update/delete for floors/features, outdoor points, route nodes/edges and OSM candidate verification; authenticated message list, alert publishing, block/unblock.
 - Return 400 for bad input, 401 for missing/invalid editor token, 404 for unknown IDs, 409 for conflicting graph edits, and a distinct successful “no route” response when disconnected. Do not expose stack traces.

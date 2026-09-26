@@ -23,14 +23,24 @@ export function validateFloorLayout(
 ): FloorIssue[] {
   const issues: FloorIssue[] = [];
   if (!polygonIsValid(layout.boundary)) {
-    issues.push({ severity: "error", code: "invalid-boundary", message: "Floor boundary is invalid." });
+    issues.push({
+      severity: "error",
+      code: "invalid-boundary",
+      message: "Floor boundary is invalid.",
+    });
     return issues;
   }
 
   layout.features.forEach((feature) => {
-    if (feature.kind === "room" && !roomContainedInBoundary(feature, layout.boundary)) {
+    if (
+      feature.kind === "room" &&
+      !roomContainedInBoundary(feature, layout.boundary)
+    ) {
       issues.push(outside(feature.id, feature.name));
-    } else if (feature.kind === "point" && !pointInPolygon(feature, layout.boundary)) {
+    } else if (
+      feature.kind === "point" &&
+      !pointInPolygon(feature, layout.boundary)
+    ) {
       issues.push(outside(feature.id, feature.name));
     } else if (
       (feature.kind === "stairs" || feature.kind === "lift") &&
@@ -67,15 +77,20 @@ export function validateFloorLayout(
           severity: forPublish ? "error" : "warning",
           code: "exit-outdoor-position-missing",
           featureId: feature.id,
-          message: "Exit needs reproducible outdoor coordinates before publishing.",
+          message:
+            "Exit needs reproducible outdoor coordinates before publishing.",
         });
       }
-      if (feature.isExit && (!feature.linkedGraphNodeId || !feature.mainPathVerified)) {
+      if (
+        feature.isExit &&
+        (!feature.linkedGraphNodeId || !feature.mainPathVerified)
+      ) {
         issues.push({
           severity: forPublish ? "error" : "warning",
           code: "exit-main-path-missing",
           featureId: feature.id,
-          message: "Exit must link to a verified main-path node before publishing.",
+          message:
+            "Exit must link to a verified main-path node before publishing.",
         });
       }
     }

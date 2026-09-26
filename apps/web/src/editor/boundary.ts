@@ -31,7 +31,8 @@ export function correctBoundaryVertex(
   if (!polygonIsValid(boundary)) return undefined;
 
   const invalid = layout.features.some((feature) => {
-    if (feature.kind === "room") return !roomContainedInBoundary(feature, boundary);
+    if (feature.kind === "room")
+      return !roomContainedInBoundary(feature, boundary);
     if (feature.kind === "point") return !pointInPolygon(feature, boundary);
     if (feature.kind === "stairs" || feature.kind === "lift") {
       return !squareContainedInBoundary(feature, feature.size, boundary);
@@ -43,17 +44,23 @@ export function correctBoundaryVertex(
   const withBoundary: FloorLayout = { ...layout, boundary };
   const affectedExitIds: string[] = [];
   const features = layout.features.map((feature) => {
-    if (feature.kind !== "door" || !feature.isExit || feature.parent.kind !== "exterior") {
+    if (
+      feature.kind !== "door" ||
+      !feature.isExit ||
+      feature.parent.kind !== "exterior"
+    ) {
       return feature;
     }
     const oldPoint = doorLocalPoint(feature, layout);
     const point = doorLocalPoint(feature, withBoundary);
     if (!point) return feature;
-    if (!oldPoint || Math.hypot(point.x - oldPoint.x, point.y - oldPoint.y) > 1e-7) {
+    if (
+      !oldPoint ||
+      Math.hypot(point.x - oldPoint.x, point.y - oldPoint.y) > 1e-7
+    ) {
       affectedExitIds.push(feature.id);
     }
     return { ...feature, outdoorPosition: floorToMap(point, layout.transform) };
   });
   return { layout: { ...withBoundary, features }, affectedExitIds };
 }
-

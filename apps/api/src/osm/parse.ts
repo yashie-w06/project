@@ -21,19 +21,23 @@ const asArray = <T>(value: T | readonly T[] | undefined): readonly T[] => {
 
 const stringAttribute = (record: XmlRecord, key: string): string => {
   const value = record[`@_${key}`];
-  if (value === undefined || value === null) throw new Error(`Missing OSM attribute ${key}`);
+  if (value === undefined || value === null)
+    throw new Error(`Missing OSM attribute ${key}`);
   return String(value);
 };
 
 const finiteAttribute = (record: XmlRecord, key: string): number => {
   const value = Number(stringAttribute(record, key));
-  if (!Number.isFinite(value)) throw new Error(`Invalid OSM numeric attribute ${key}`);
+  if (!Number.isFinite(value))
+    throw new Error(`Invalid OSM numeric attribute ${key}`);
   return value;
 };
 
 function parseTags(value: unknown): OsmTags {
   const tags: Record<string, string> = {};
-  for (const raw of asArray(value as XmlRecord | readonly XmlRecord[] | undefined)) {
+  for (const raw of asArray(
+    value as XmlRecord | readonly XmlRecord[] | undefined,
+  )) {
     const key = stringAttribute(raw, "k");
     tags[key] = stringAttribute(raw, "v");
   }
@@ -41,33 +45,47 @@ function parseTags(value: unknown): OsmTags {
 }
 
 export function parseOsmXml(xml: string): OsmExtract {
-  const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    parseAttributeValue: false,
+  });
   const parsed = parser.parse(xml) as { osm?: XmlRecord };
   if (!parsed.osm) throw new Error("Invalid OSM XML: missing osm root");
   const root = parsed.osm;
   const nodes = new Map<string, OsmNode>();
-  for (const raw of asArray(root.node as XmlRecord | readonly XmlRecord[] | undefined)) {
+  for (const raw of asArray(
+    root.node as XmlRecord | readonly XmlRecord[] | undefined,
+  )) {
     const node: OsmNode = Object.freeze({
       id: stringAttribute(raw, "id"),
-      coordinates: Object.freeze([finiteAttribute(raw, "lon"), finiteAttribute(raw, "lat")]) as LonLat,
+      coordinates: Object.freeze([
+        finiteAttribute(raw, "lon"),
+        finiteAttribute(raw, "lat"),
+      ]) as LonLat,
       tags: parseTags(raw.tag),
     });
     if (nodes.has(node.id)) throw new Error(`Duplicate OSM node ${node.id}`);
     nodes.set(node.id, node);
   }
 
-  const ways: OsmWay[] = asArray(root.way as XmlRecord | readonly XmlRecord[] | undefined).map((raw) =>
+  const ways: OsmWay[] = asArray(
+    root.way as XmlRecord | readonly XmlRecord[] | undefined,
+  ).map((raw) =>
     Object.freeze({
       id: stringAttribute(raw, "id"),
       nodeIds: Object.freeze(
-        asArray(raw.nd as XmlRecord | readonly XmlRecord[] | undefined).map((nd) => stringAttribute(nd, "ref")),
+        asArray(raw.nd as XmlRecord | readonly XmlRecord[] | undefined).map(
+          (nd) => stringAttribute(nd, "ref"),
+        ),
       ),
       tags: parseTags(raw.tag),
     }),
   );
   ways.sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
 
-  const rawBounds = asArray(root.bounds as XmlRecord | readonly XmlRecord[] | undefined)[0];
+  const rawBounds = asArray(
+    root.bounds as XmlRecord | readonly XmlRecord[] | undefined,
+  )[0];
   const bounds = rawBounds
     ? Object.freeze({
         minLongitude: finiteAttribute(rawBounds, "minlon"),
@@ -79,11 +97,15 @@ export function parseOsmXml(xml: string): OsmExtract {
   return Object.freeze({ bounds, nodes, ways: Object.freeze(ways) });
 }
 
-function coordinatesForWay(extract: OsmExtract, way: OsmWay): readonly LonLat[] {
+function coordinatesForWay(
+  extract: OsmExtract,
+  way: OsmWay,
+): readonly LonLat[] {
   return Object.freeze(
     way.nodeIds.map((id) => {
       const node = extract.nodes.get(id);
-      if (!node) throw new Error(`OSM way ${way.id} references missing node ${id}`);
+      if (!node)
+        throw new Error(`OSM way ${way.id} references missing node ${id}`);
       return node.coordinates;
     }),
   );
@@ -107,7 +129,10 @@ export function extractOsmImportModel(extract: OsmExtract): OsmImportModel {
         const footprint: Feature<Polygon> = {
           type: "Feature",
           properties: { sourceOsmWayId: way.id },
-          geometry: { type: "Polygon", coordinates: [coordinates.map(([lon, lat]) => [lon, lat])] },
+          geometry: {
+            type: "Polygon",
+            coordinates: [coordinates.map(([lon, lat]) => [lon, lat])],
+          },
         };
         Object.freeze(footprint.geometry.coordinates[0]);
         Object.freeze(footprint.geometry.coordinates);
@@ -119,7 +144,9 @@ export function extractOsmImportModel(extract: OsmExtract): OsmImportModel {
             id: `osm-building-${way.id}`,
             sourceWayId: way.id,
             name: way.tags.name ?? null,
-            levels: numericLevels(way.tags["building:levels"] ?? way.tags.levels),
+            levels: numericLevels(
+              way.tags["building:levels"] ?? way.tags.levels,
+            ),
             footprint,
           }),
         );
@@ -132,7 +159,10 @@ export function extractOsmImportModel(extract: OsmExtract): OsmImportModel {
       const geometry: Feature<LineString> = {
         type: "Feature",
         properties: { sourceOsmWayId: way.id, referenceOnly: true },
-        geometry: { type: "LineString", coordinates: coordinates.map(([lon, lat]) => [lon, lat]) },
+        geometry: {
+          type: "LineString",
+          coordinates: coordinates.map(([lon, lat]) => [lon, lat]),
+        },
       };
       Object.freeze(geometry.geometry.coordinates);
       Object.freeze(geometry.geometry);
@@ -158,7 +188,10 @@ export function extractOsmImportModel(extract: OsmExtract): OsmImportModel {
             sourceWayId: way.id,
             fromNodeId: way.nodeIds[index]!,
             toNodeId: way.nodeIds[index + 1]!,
-            coordinates: Object.freeze([coordinates[index]!, coordinates[index + 1]!] as const),
+            coordinates: Object.freeze([
+              coordinates[index]!,
+              coordinates[index + 1]!,
+            ] as const),
           }),
         );
       }

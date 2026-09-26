@@ -280,25 +280,89 @@ button {
   color: #315b4b;
   margin-top: 15px;
 }
-.editor-page { min-height: 100vh; }
-.editor-nav { display: flex; gap: 4px; padding: 10px 24px; background: #fff; border-bottom: 1px solid #d9e0db; }
-.editor-nav button { border: 0; background: transparent; padding: 10px 14px; border-radius: 7px; }
-.editor-nav .active { background: #dfeee7; color: #155a45; }
-.editor-nav button:last-child { margin-left: auto; }
-.editor-content { padding: 20px 28px; }
-.editor-section { background: #fff; border: 1px solid #d8e0da; border-radius: 12px; padding: 18px; }
-.editor-grid { display: grid; grid-template-columns: 330px 1fr; gap: 24px; }
-.coordinate-row { display: flex; gap: 6px; }
-.coordinate-row input { width: 50%; padding: 8px; }
-.candidate-list { max-height: 520px; overflow: auto; display: grid; gap: 7px; }
-.candidate-list article, .message-list article { border: 1px solid #dce3de; border-radius: 8px; padding: 10px; display: grid; gap: 5px; }
-.candidate-list article > span { font-size: 12px; color: #68746c; }
-.candidate-list article div { display: flex; gap: 5px; }
-.candidate-list button { font-size: 12px; }
-.message-list { display: grid; gap: 10px; }
-.message-list article { background: #fff; }
-.message-list p { margin: 2px 0; }
-.building-id { max-width: 500px; }
+.editor-page {
+  min-height: 100vh;
+}
+.editor-nav {
+  display: flex;
+  gap: 4px;
+  padding: 10px 24px;
+  background: #fff;
+  border-bottom: 1px solid #d9e0db;
+}
+.editor-nav button {
+  border: 0;
+  background: transparent;
+  padding: 10px 14px;
+  border-radius: 7px;
+}
+.editor-nav .active {
+  background: #dfeee7;
+  color: #155a45;
+}
+.editor-nav button:last-child {
+  margin-left: auto;
+}
+.editor-content {
+  padding: 20px 28px;
+}
+.editor-section {
+  background: #fff;
+  border: 1px solid #d8e0da;
+  border-radius: 12px;
+  padding: 18px;
+}
+.editor-grid {
+  display: grid;
+  grid-template-columns: 330px 1fr;
+  gap: 24px;
+}
+.coordinate-row {
+  display: flex;
+  gap: 6px;
+}
+.coordinate-row input {
+  width: 50%;
+  padding: 8px;
+}
+.candidate-list {
+  max-height: 520px;
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+}
+.candidate-list article,
+.message-list article {
+  border: 1px solid #dce3de;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 5px;
+}
+.candidate-list article > span {
+  font-size: 12px;
+  color: #68746c;
+}
+.candidate-list article div {
+  display: flex;
+  gap: 5px;
+}
+.candidate-list button {
+  font-size: 12px;
+}
+.message-list {
+  display: grid;
+  gap: 10px;
+}
+.message-list article {
+  background: #fff;
+}
+.message-list p {
+  margin: 2px 0;
+}
+.building-id {
+  max-width: 500px;
+}
 @media (max-width: 760px) {
   .topbar {
     height: 68px;
@@ -325,8 +389,17 @@ button {
   .profiles {
     grid-template-columns: 1fr;
   }
-  .editor-content { padding: 14px; }
-  .editor-grid { grid-template-columns: 1fr; }
-  .editor-nav { padding: 8px; overflow: auto; }
-  .editor-nav button { white-space: nowrap; }
+  .editor-content {
+    padding: 14px;
+  }
+  .editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .editor-nav {
+    padding: 8px;
+    overflow: auto;
+  }
+  .editor-nav button {
+    white-space: nowrap;
+  }
 }

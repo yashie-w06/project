@@ -14,15 +14,20 @@ export interface OsmImportStore {
   upsertPathCandidate(candidate: OsmPathCandidate): Promise<void>;
 }
 
-export async function importOsmXml(store: OsmImportStore, xml: string): Promise<{
+export async function importOsmXml(
+  store: OsmImportStore,
+  xml: string,
+): Promise<{
   buildingCount: number;
   pathCandidateCount: number;
   pathSegmentCount: number;
 }> {
   const model = parseOsmImportModel(xml);
   await store.transaction(async (transaction) => {
-    for (const building of model.buildings) await transaction.upsertBuilding(building);
-    for (const candidate of model.pathCandidates) await transaction.upsertPathCandidate(candidate);
+    for (const building of model.buildings)
+      await transaction.upsertBuilding(building);
+    for (const candidate of model.pathCandidates)
+      await transaction.upsertPathCandidate(candidate);
   });
   return {
     buildingCount: model.buildings.length,
@@ -38,7 +43,9 @@ export async function readBundledOsm(): Promise<string> {
   return readFile(path, "utf8");
 }
 
-export async function inspectBundledOsm(): Promise<ReturnType<typeof parseOsmImportModel>> {
+export async function inspectBundledOsm(): Promise<
+  ReturnType<typeof parseOsmImportModel>
+> {
   return parseOsmImportModel(await readBundledOsm());
 }
 
@@ -47,7 +54,9 @@ type SqlClient = Pick<PoolClient, "query">;
 class ClientOsmImportStore implements OsmImportStore {
   constructor(private readonly client: SqlClient) {}
 
-  async transaction<T>(work: (store: OsmImportStore) => Promise<T>): Promise<T> {
+  async transaction<T>(
+    work: (store: OsmImportStore) => Promise<T>,
+  ): Promise<T> {
     return work(this);
   }
 
@@ -81,9 +90,13 @@ class ClientOsmImportStore implements OsmImportStore {
   }
 }
 
-export function createPgOsmImportStore(pool: Pick<Pool, "connect">): OsmImportStore {
+export function createPgOsmImportStore(
+  pool: Pick<Pool, "connect">,
+): OsmImportStore {
   return {
-    async transaction<T>(work: (store: OsmImportStore) => Promise<T>): Promise<T> {
+    async transaction<T>(
+      work: (store: OsmImportStore) => Promise<T>,
+    ): Promise<T> {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -126,7 +139,9 @@ const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
 if (invokedPath === fileURLToPath(import.meta.url)) {
   runOsmImportCli().catch(() => {
     // Never echo connection errors because driver messages can include environment details.
-    console.error("OSM import failed. Check the database connection and migration state.");
+    console.error(
+      "OSM import failed. Check the database connection and migration state.",
+    );
     process.exitCode = 1;
   });
 }

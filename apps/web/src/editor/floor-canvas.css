@@ -3,7 +3,22 @@
   gap: 0.75rem;
   min-width: 0;
   color: #172033;
-  font: 500 0.875rem/1.4 system-ui, sans-serif;
+  font:
+    500 0.875rem/1.4 system-ui,
+    sans-serif;
+}
+
+.floor-editor__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  align-items: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.floor-editor__canvas-host {
+  min-width: 0;
+  width: 100%;
 }
 
 .floor-editor button,
@@ -47,12 +62,14 @@
 }
 
 .floor-editor__canvas {
+  width: 100%;
   max-width: 100%;
   overflow: hidden;
   border: 1px solid #cbd5e1;
   border-radius: 0.75rem;
   background-color: #e2e8f0;
-  background-image: linear-gradient(#cbd5e1 1px, transparent 1px),
+  background-image:
+    linear-gradient(#cbd5e1 1px, transparent 1px),
     linear-gradient(90deg, #cbd5e1 1px, transparent 1px);
   background-size: 24px 24px;
   box-shadow: inset 0 1px 3px rgb(15 23 42 / 0.08);
@@ -68,14 +85,25 @@
 }
 
 .floor-editor__inspector {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+  display: grid;
+  align-content: start;
   gap: 0.65rem;
   border: 1px solid #dbe3ef;
   border-radius: 0.65rem;
   background: #f8fafc;
   padding: 0.75rem;
+}
+
+.floor-editor__empty-inspector {
+  border: 1px solid #dbe3ef;
+  border-radius: 0.65rem;
+  background: #f8fafc;
+  color: #475569;
+  padding: 0.9rem;
+}
+
+.floor-editor__empty-inspector p {
+  margin: 0.55rem 0 0;
 }
 
 .floor-editor__inspector label {
@@ -112,6 +140,13 @@
   color: #b91c1c;
 }
 
+.floor-editor__inspector .floor-editor__feature-warning {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  text-align: left;
+}
+
 .floor-editor__issues {
   border-left: 3px solid #f59e0b;
   background: #fffbeb;
@@ -122,16 +157,38 @@
   margin: 0.2rem 0;
 }
 
-.floor-editor__issues p[data-severity="error"] {
+.floor-editor__issues button {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #92400e;
+  padding: 0.2rem 0;
+  text-align: left;
+  text-decoration: underline;
+}
+
+.floor-editor__issues p[data-severity="error"],
+.floor-editor__issues button[data-severity="error"] {
   color: #b91c1c;
 }
 
 @media (max-width: 700px) {
+  .floor-editor__workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .floor-editor__toolbar-spacer {
     display: none;
   }
 
   .floor-editor__canvas {
     width: 100% !important;
+    min-height: 360px;
+  }
+
+  .floor-editor__inspector,
+  .floor-editor__empty-inspector {
+    order: 2;
   }
 }

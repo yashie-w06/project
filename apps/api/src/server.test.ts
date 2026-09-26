@@ -5,11 +5,49 @@ import { createApp } from "./server.js";
 import type { Config } from "./config.js";
 import type { Database } from "./db.js";
 
-const config:Config={DATABASE_URL:"postgresql://unused",EDITOR_EMAIL:"editor@example.com",EDITOR_PASSWORD:"testing-password",EDITOR_TOKEN_SECRET:"this-is-a-test-secret-with-more-than-32-characters",WEB_ORIGIN:"http://localhost:5173",PORT:3001,NODE_ENV:"test",SNAP_RADIUS_METRES:25};
-const db={query:async(sql:string)=>({rowCount:sql==="SELECT 1"?1:0,rows:[]}),connect:async()=>{throw new Error("not expected")},end:async()=>undefined} as unknown as Database;
-const app=createApp(config,db);
+const config: Config = {
+  DATABASE_URL: "postgresql://unused",
+  EDITOR_EMAIL: "editor@example.com",
+  EDITOR_PASSWORD: "testing-password",
+  EDITOR_TOKEN_SECRET: "this-is-a-test-secret-with-more-than-32-characters",
+  WEB_ORIGIN: "http://localhost:5173",
+  PORT: 3001,
+  NODE_ENV: "test",
+  SNAP_RADIUS_METRES: 25,
+};
+const db = {
+  query: async (sql: string) => ({
+    rowCount: sql === "SELECT 1" ? 1 : 0,
+    rows: [],
+  }),
+  connect: async () => {
+    throw new Error("not expected");
+  },
+  end: async () => undefined,
+} as unknown as Database;
+const app = createApp(config, db);
 
-test("health distinguishes a ready database without exposing configuration",async()=>{const response=await request(app).get("/api/health");assert.equal(response.status,200);assert.deepEqual(response.body,{process:"ok",database:"ready"});assert.equal(JSON.stringify(response.body).includes("postgresql"),false);});
-test("editor writes reject an anonymous request",async()=>{const response=await request(app).put("/api/editor/nodes/example").send({coordinates:[75.87,22.72],version:1});assert.equal(response.status,401);});
-test("public message validation rejects out-of-campus coordinates before persistence",async()=>{const response=await request(app).post("/api/messages").send({coordinates:[0,0],description:"test"});assert.equal(response.status,400);});
-test("bad editor credentials receive 401",async()=>{const response=await request(app).post("/api/editor/login").send({email:"editor@example.com",password:"wrong"});assert.equal(response.status,401);});
+test("health distinguishes a ready database without exposing configuration", async () => {
+  const response = await request(app).get("/api/health");
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { process: "ok", database: "ready" });
+  assert.equal(JSON.stringify(response.body).includes("postgresql"), false);
+});
+test("editor writes reject an anonymous request", async () => {
+  const response = await request(app)
+    .put("/api/editor/nodes/example")
+    .send({ coordinates: [75.87, 22.72], version: 1 });
+  assert.equal(response.status, 401);
+});
+test("public message validation rejects out-of-campus coordinates before persistence", async () => {
+  const response = await request(app)
+    .post("/api/messages")
+    .send({ coordinates: [0, 0], description: "test" });
+  assert.equal(response.status, 400);
+});
+test("bad editor credentials receive 401", async () => {
+  const response = await request(app)
+    .post("/api/editor/login")
+    .send({ email: "editor@example.com", password: "wrong" });
+  assert.equal(response.status, 401);
+});

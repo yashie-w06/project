@@ -7,19 +7,29 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { Circle, Group, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
+import {
+  Circle,
+  Group,
+  Layer,
+  Line,
+  Rect,
+  Stage,
+  Text,
+  Transformer,
+} from "react-konva";
 import { correctBoundaryVertex } from "./boundary";
 import {
   containedRoomTranslation,
+  centredConnectorLabel,
+  centredRoomLabel,
   doorLocalPoint,
   nearestDoorSnap,
   pointInPolygon,
   roomContainedInBoundary,
   squareContainedInBoundary,
 } from "./geometry";
-import { floorToMap } from "./transform";
+import { floorToMap, screenToFloorPoint } from "./transform";
 import type {
-  ConnectorFeature,
   ConnectorPlacement,
   DoorFeature,
   FloorFeature,
@@ -31,7 +41,8 @@ import type {
 import { isExitEligible, validateFloorLayout } from "./validation";
 import "./floor-canvas.css";
 
-type Tool = "select" | "boundary" | "room" | "door" | "point" | "stairs" | "lift";
+type Tool =
+  "select" | "boundary" | "room" | "door" | "point" | "stairs" | "lift";
 
 export type VerifiedMainNodeOption = {
   nodeId: string;
@@ -43,12 +54,15 @@ export type FloorCanvasProps = {
   onChange: (next: FloorLayout) => void;
   onSaveDraft: (draft: FloorLayout) => void | Promise<void>;
   onPublish: (published: FloorLayout) => void | Promise<void>;
-  onReloadDraft?: () => FloorLayout | undefined | Promise<FloorLayout | undefined>;
+  onReloadDraft?: () =>
+    FloorLayout | undefined | Promise<FloorLayout | undefined>;
   connectorPlacements?: ConnectorPlacement[];
   verifiedMainNodes?: VerifiedMainNodeOption[];
   width?: number;
   height?: number;
   disabled?: boolean;
+  /** Opens the outdoor map with this draft exit highlighted for graph linking. */
+  onLinkExit?: (door: DoorFeature) => void;
 };
 
 type View = { x: number; y: number; scale: number };
@@ -60,7 +74,10 @@ function uid(prefix: string): string {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
 }
 
-function replaceFeature(layout: FloorLayout, replacement: FloorFeature): FloorLayout {
+function replaceFeature(
+  layout: FloorLayout,
+  replacement: FloorFeature,
+): FloorLayout {
   return {
     ...layout,
     features: layout.features.map((feature) =>
@@ -70,7 +87,8 @@ function replaceFeature(layout: FloorLayout, replacement: FloorFeature): FloorLa
 }
 
 function fitView(layout: FloorLayout, width: number, height: number): View {
-  const scale = Math.min(width / layout.localWidth, height / layout.localHeight) * 0.86;
+  const scale =
+    Math.min(width / layout.localWidth, height / layout.localHeight) * 0.86;
   return {
     x: (width - layout.localWidth * scale) / 2,
     y: (height - layout.localHeight * scale) / 2,
@@ -81,10 +99,11 @@ function fitView(layout: FloorLayout, width: number, height: number): View {
 function stagePoint(stage: Konva.Stage): LocalPoint | undefined {
   const pointer = stage.getPointerPosition();
   if (!pointer) return undefined;
-  return {
-    x: (pointer.x - stage.x()) / stage.scaleX(),
-    y: (pointer.y - stage.y()) / stage.scaleY(),
-  };
+  return screenToFloorPoint(pointer, {
+    x: stage.x(),
+    y: stage.y(),
+    scale: stage.scaleX(),
+  });
 }
 
 function firstRoomAt(
@@ -123,10 +142,12 @@ export function FloorCanvas({
   onReloadDraft,
   connectorPlacements = [],
   verifiedMainNodes = [],
-  width = 920,
-  height = 620,
+  width,
+  height,
   disabled = false,
+  onLinkExit,
 }: FloorCanvasProps) {
+  const canvasHostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const historyRef = useRef<FloorLayout[]>([]);
@@ -134,9 +155,31 @@ export function FloorCanvas({
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string>();
   const [preview, setPreview] = useState(false);
-  const [view, setView] = useState<View>(() => fitView(value, width, height));
+  const initialWidth = width ?? 920;
+  const initialHeight = height ?? 620;
+  const [view, setView] = useState<View>(() =>
+    fitView(value, initialWidth, initialHeight),
+  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
+  const [measuredWidth, setMeasuredWidth] = useState(initialWidth);
+
+  useEffect(() => {
+    const host = canvasHostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      setMeasuredWidth(Math.max(280, Math.floor(entry.contentRect.width)));
+    });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  const canvasWidth = width ? Math.min(width, measuredWidth) : measuredWidth;
+  const canvasHeight = Math.max(
+    360,
+    Math.min(height ?? 680, Math.round(canvasWidth * 0.68)),
+  );
 
   const issues = useMemo(
     () => validateFloorLayout(value, connectorPlacements, false),
@@ -145,10 +188,14 @@ export function FloorCanvas({
   const selected = value.features.find((feature) => feature.id === selectedId);
 
   useEffect(() => {
-    setView(fitView(value, width, height));
+    setView(fitView(value, canvasWidth, canvasHeight));
     historyRef.current = [];
     setSelectedId(undefined);
-  }, [value.buildingId, value.floor, width, height]);
+  }, [value.buildingId, value.floor]);
+
+  useEffect(() => {
+    setView(fitView(value, canvasWidth, canvasHeight));
+  }, [canvasHeight, canvasWidth, value.localHeight, value.localWidth]);
 
   useEffect(() => {
     const transformer = transformerRef.current;
@@ -211,7 +258,10 @@ export function FloorCanvas({
     } else if (tool === "point" && pointInPolygon(point, value.boundary)) {
       feature = { id: uid("point"), kind: "point", name: "Point", ...point };
     } else if (tool === "stairs" || tool === "lift") {
-      const size = Math.max(5, Math.min(value.localWidth, value.localHeight) * 0.065);
+      const size = Math.max(
+        5,
+        Math.min(value.localWidth, value.localHeight) * 0.065,
+      );
       if (squareContainedInBoundary(point, size, value.boundary)) {
         feature = {
           id: uid(tool),
@@ -243,7 +293,10 @@ export function FloorCanvas({
     const pointer = stage?.getPointerPosition();
     if (!stage || !pointer) return;
     const oldScale = view.scale;
-    const local = { x: (pointer.x - view.x) / oldScale, y: (pointer.y - view.y) / oldScale };
+    const local = {
+      x: (pointer.x - view.x) / oldScale,
+      y: (pointer.y - view.y) / oldScale,
+    };
     const direction = event.evt.deltaY > 0 ? -1 : 1;
     const scale = Math.max(
       MIN_SCALE,
@@ -262,7 +315,9 @@ export function FloorCanvas({
       await onSaveDraft({ ...value, status: "draft" });
       setNotice("Draft saved.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Draft could not be saved.");
+      setNotice(
+        error instanceof Error ? error.message : "Draft could not be saved.",
+      );
     } finally {
       setBusy(false);
     }
@@ -280,7 +335,11 @@ export function FloorCanvas({
       await onPublish({ ...value, status: "published" });
       setNotice("Floor published.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Floor could not be published.");
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Floor could not be published.",
+      );
     } finally {
       setBusy(false);
     }
@@ -297,17 +356,32 @@ export function FloorCanvas({
         setNotice("Saved draft reloaded.");
       } else setNotice("No saved draft is available.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Draft could not be reloaded.");
+      setNotice(
+        error instanceof Error ? error.message : "Draft could not be reloaded.",
+      );
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <section className="floor-editor" aria-label={`Floor ${value.floor} editor`}>
+    <section
+      className="floor-editor"
+      aria-label={`Floor ${value.floor} editor`}
+    >
       {!preview && (
         <div className="floor-editor__toolbar" aria-label="Floor drawing tools">
-          {(["select", "boundary", "room", "door", "point", "stairs", "lift"] as const).map((item) => (
+          {(
+            [
+              "select",
+              "boundary",
+              "room",
+              "door",
+              "point",
+              "stairs",
+              "lift",
+            ] as const
+          ).map((item) => (
             <button
               type="button"
               key={item}
@@ -324,11 +398,19 @@ export function FloorCanvas({
             </button>
           ))}
           <span className="floor-editor__toolbar-spacer" />
-          <button type="button" onClick={undo} disabled={!historyRef.current.length || disabled}>
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!historyRef.current.length || disabled}
+          >
             Undo
           </button>
           {onReloadDraft && (
-            <button type="button" onClick={reloadDraft} disabled={busy || disabled}>
+            <button
+              type="button"
+              onClick={reloadDraft}
+              disabled={busy || disabled}
+            >
               Reload draft
             </button>
           )}
@@ -352,153 +434,188 @@ export function FloorCanvas({
         </div>
       )}
 
-      <div className="floor-editor__canvas" style={{ width, height }}>
-        <Stage
-          ref={stageRef}
-          width={width}
-          height={height}
-          x={view.x}
-          y={view.y}
-          scaleX={view.scale}
-          scaleY={view.scale}
-          draggable={!disabled && tool === "select"}
-          onWheel={handleWheel}
-          onDragStart={(event) => {
-            if (event.target === event.target.getStage()) panStartRef.current = view;
-          }}
-          onDragEnd={(event) => {
-            if (event.target === event.target.getStage()) {
-              setView((current) => ({ ...current, x: event.target.x(), y: event.target.y() }));
-              panStartRef.current = null;
-            }
-          }}
-          onMouseDown={(event) => {
-            const stage = event.target.getStage();
-            if (stage && event.target === stage && tool === "select") setSelectedId(undefined);
-          }}
-          onClick={(event) => {
-            const stage = event.target.getStage();
-            if (!stage || event.target !== stage) return;
-            const point = stagePoint(stage);
-            if (point) addAt(point);
-          }}
-        >
-          <Layer>
-            <Line
-              points={value.boundary.flatMap((point) => [point.x, point.y])}
-              closed
-              fill="#f8fafc"
-              stroke="#334155"
-              strokeWidth={2 / view.scale}
-              listening={false}
-            />
-            {tool === "boundary" &&
-              !preview &&
-              value.boundary.map((point, index) => (
-                <Circle
-                  key={`boundary-${index}`}
-                  x={point.x}
-                  y={point.y}
-                  radius={3.5}
-                  fill="#ffffff"
-                  stroke="#dc2626"
-                  strokeWidth={1.2 / view.scale}
-                  draggable
-                  onDragEnd={(event) => {
-                    const correction = correctBoundaryVertex(value, index, {
-                      x: event.target.x(),
-                      y: event.target.y(),
-                    });
-                    if (!correction) {
-                      event.target.position(point);
-                      setNotice(
-                        "Boundary correction rejected: it would invalidate the polygon or leave a complete feature outside.",
-                      );
-                      return;
-                    }
-                    commit(correction.layout);
-                    if (correction.affectedExitIds.length) {
-                      setNotice(
-                        `Review changed outdoor positions for exits: ${correction.affectedExitIds.join(", ")}.`,
-                      );
-                    }
-                  }}
+      <div className="floor-editor__workspace">
+        <div ref={canvasHostRef} className="floor-editor__canvas-host">
+          <div
+            className="floor-editor__canvas"
+            style={{ height: canvasHeight }}
+          >
+            <Stage
+              ref={stageRef}
+              width={canvasWidth}
+              height={canvasHeight}
+              x={view.x}
+              y={view.y}
+              scaleX={view.scale}
+              scaleY={view.scale}
+              draggable={!disabled && tool === "select"}
+              onWheel={handleWheel}
+              onDragStart={(event) => {
+                if (event.target === event.target.getStage())
+                  panStartRef.current = view;
+              }}
+              onDragEnd={(event) => {
+                if (event.target === event.target.getStage()) {
+                  setView((current) => ({
+                    ...current,
+                    x: event.target.x(),
+                    y: event.target.y(),
+                  }));
+                  panStartRef.current = null;
+                }
+              }}
+              onMouseDown={(event) => {
+                const stage = event.target.getStage();
+                if (stage && event.target === stage && tool === "select")
+                  setSelectedId(undefined);
+              }}
+              onClick={(event) => {
+                const stage = event.target.getStage();
+                if (!stage || event.target !== stage) return;
+                const point = stagePoint(stage);
+                if (point) addAt(point);
+              }}
+            >
+              <Layer>
+                <Line
+                  points={value.boundary.flatMap((point) => [point.x, point.y])}
+                  closed
+                  fill="#f8fafc"
+                  stroke="#334155"
+                  strokeWidth={2 / view.scale}
+                  listening={false}
                 />
-              ))}
-            {value.features.map((feature) => (
-              <FloorFeatureShape
-                key={feature.id}
-                feature={feature}
-                layout={value}
-                selected={feature.id === selectedId}
-                preview={preview}
-                viewScale={view.scale}
-                onSelect={() => setSelectedId(feature.id)}
-                onChange={updateFeature}
-                onInvalid={setNotice}
-              />
-            ))}
-            {!preview && (
-              <Transformer
-                ref={transformerRef}
-                rotateEnabled={false}
-                flipEnabled={false}
-                enabledAnchors={[
-                  "top-left",
-                  "top-right",
-                  "bottom-left",
-                  "bottom-right",
-                  "middle-left",
-                  "middle-right",
-                  "top-center",
-                  "bottom-center",
-                ]}
-                boundBoxFunc={(oldBox, newBox) => {
-                  if (!selected || selected.kind !== "room") return oldBox;
-                  const stage = stageRef.current;
-                  if (!stage) return oldBox;
-                  const candidate = {
-                    ...selected,
-                    x: (newBox.x - stage.x()) / stage.scaleX(),
-                    y: (newBox.y - stage.y()) / stage.scaleY(),
-                    width: newBox.width / stage.scaleX(),
-                    height: newBox.height / stage.scaleY(),
-                  };
-                  return candidate.width >= 3 &&
-                    candidate.height >= 3 &&
-                    roomContainedInBoundary(candidate, value.boundary)
-                    ? newBox
-                    : oldBox;
-                }}
-              />
-            )}
-          </Layer>
-        </Stage>
+                {tool === "boundary" &&
+                  !preview &&
+                  value.boundary.map((point, index) => (
+                    <Circle
+                      key={`boundary-${index}`}
+                      x={point.x}
+                      y={point.y}
+                      radius={3.5}
+                      fill="#ffffff"
+                      stroke="#dc2626"
+                      strokeWidth={1.2 / view.scale}
+                      draggable
+                      onDragEnd={(event) => {
+                        const correction = correctBoundaryVertex(value, index, {
+                          x: event.target.x(),
+                          y: event.target.y(),
+                        });
+                        if (!correction) {
+                          event.target.position(point);
+                          setNotice(
+                            "Boundary correction rejected: it would invalidate the polygon or leave a complete feature outside.",
+                          );
+                          return;
+                        }
+                        commit(correction.layout);
+                        if (correction.affectedExitIds.length) {
+                          setNotice(
+                            `Review changed outdoor positions for exits: ${correction.affectedExitIds.join(", ")}.`,
+                          );
+                        }
+                      }}
+                    />
+                  ))}
+                {value.features.map((feature) => (
+                  <FloorFeatureShape
+                    key={feature.id}
+                    feature={feature}
+                    layout={value}
+                    selected={feature.id === selectedId}
+                    preview={preview}
+                    viewScale={view.scale}
+                    onSelect={() => setSelectedId(feature.id)}
+                    onChange={updateFeature}
+                    onInvalid={setNotice}
+                  />
+                ))}
+                {!preview && (
+                  <Transformer
+                    ref={transformerRef}
+                    rotateEnabled={false}
+                    flipEnabled={false}
+                    enabledAnchors={[
+                      "top-left",
+                      "top-right",
+                      "bottom-left",
+                      "bottom-right",
+                      "middle-left",
+                      "middle-right",
+                      "top-center",
+                      "bottom-center",
+                    ]}
+                    boundBoxFunc={(oldBox, newBox) => {
+                      if (!selected || selected.kind !== "room") return oldBox;
+                      const stage = stageRef.current;
+                      if (!stage) return oldBox;
+                      const candidate = {
+                        ...selected,
+                        x: (newBox.x - stage.x()) / stage.scaleX(),
+                        y: (newBox.y - stage.y()) / stage.scaleY(),
+                        width: newBox.width / stage.scaleX(),
+                        height: newBox.height / stage.scaleY(),
+                      };
+                      return candidate.width >= 3 &&
+                        candidate.height >= 3 &&
+                        roomContainedInBoundary(candidate, value.boundary)
+                        ? newBox
+                        : oldBox;
+                    }}
+                  />
+                )}
+              </Layer>
+            </Stage>
+          </div>
+        </div>
+
+        {!preview && selected && (
+          <FeatureInspector
+            feature={selected}
+            floor={value.floor}
+            verifiedMainNodes={verifiedMainNodes}
+            issues={issues.filter((issue) => issue.featureId === selected.id)}
+            onLinkExit={onLinkExit}
+            onChange={(feature) => {
+              if (feature.kind === "door" && feature.isExit) {
+                const point = doorLocalPoint(feature, value);
+                feature = point
+                  ? {
+                      ...feature,
+                      outdoorPosition: floorToMap(point, value.transform),
+                    }
+                  : feature;
+              }
+              updateFeature(feature);
+            }}
+            onDelete={() => {
+              commit({
+                ...value,
+                features: value.features.filter(
+                  (feature) => feature.id !== selected.id,
+                ),
+              });
+              setSelectedId(undefined);
+            }}
+          />
+        )}
+        {!preview && !selected && (
+          <aside className="floor-editor__empty-inspector">
+            <strong>Component inspector</strong>
+            <p>Select a room, door, special dot, stairs, or lift to edit it.</p>
+            <p>Wheel or trackpad to zoom. Drag empty canvas space to pan.</p>
+          </aside>
+        )}
       </div>
 
-      {!preview && selected && (
-        <FeatureInspector
-          feature={selected}
-          floor={value.floor}
-          verifiedMainNodes={verifiedMainNodes}
-          onChange={(feature) => {
-            if (feature.kind === "door" && feature.isExit) {
-              const point = doorLocalPoint(feature, value);
-              feature = point ? { ...feature, outdoorPosition: floorToMap(point, value.transform) } : feature;
-            }
-            updateFeature(feature);
-          }}
-          onDelete={() => {
-            commit({
-              ...value,
-              features: value.features.filter((feature) => feature.id !== selected.id),
-            });
-            setSelectedId(undefined);
-          }}
+      {!preview && (
+        <IssueList
+          issues={issues}
+          notice={notice}
+          onFocus={(featureId) => setSelectedId(featureId)}
         />
       )}
-
-      {!preview && <IssueList issues={issues} notice={notice} />}
     </section>
   );
 }
@@ -515,7 +632,16 @@ type ShapeProps = {
 };
 
 function FloorFeatureShape(props: ShapeProps) {
-  const { feature, layout, selected, preview, viewScale, onSelect, onChange, onInvalid } = props;
+  const {
+    feature,
+    layout,
+    selected,
+    preview,
+    viewScale,
+    onSelect,
+    onChange,
+    onInvalid,
+  } = props;
   const common = {
     id: `feature-${feature.id}`,
     onClick: (event: Konva.KonvaEventObject<MouseEvent>) => {
@@ -529,6 +655,7 @@ function FloorFeatureShape(props: ShapeProps) {
   };
 
   if (feature.kind === "room") {
+    const label = centredRoomLabel(feature);
     return (
       <Group>
         <Rect
@@ -562,19 +689,24 @@ function FloorFeatureShape(props: ShapeProps) {
               height: Math.max(3, node.height() * node.scaleY()),
             };
             node.scale({ x: 1, y: 1 });
-            if (roomContainedInBoundary(candidate, layout.boundary)) onChange(candidate);
+            if (roomContainedInBoundary(candidate, layout.boundary))
+              onChange(candidate);
             else {
               node.position({ x: feature.x, y: feature.y });
-              onInvalid("The complete room must remain inside the floor boundary.");
+              onInvalid(
+                "The complete room must remain inside the floor boundary.",
+              );
             }
           }}
         />
         <Text
-          x={feature.x + 3}
-          y={feature.y + 3}
-          width={Math.max(0, feature.width - 6)}
+          {...label}
           text={feature.name}
-          fontSize={Math.max(3, Math.min(7, feature.height / 4))}
+          align="center"
+          verticalAlign="middle"
+          wrap="word"
+          ellipsis
+          lineHeight={1.05}
           fill="#312e81"
           listening={false}
         />
@@ -599,17 +731,24 @@ function FloorFeatureShape(props: ShapeProps) {
           );
           event.target.position(point);
           if (!snap) {
-            onInvalid("Door must stay attached to a room side or exterior edge.");
+            onInvalid(
+              "Door must stay attached to a room side or exterior edge.",
+            );
             return;
           }
-          const staysExit = feature.isExit && snap.parent.kind === "exterior" && layout.floor === 0;
+          const staysExit =
+            feature.isExit &&
+            snap.parent.kind === "exterior" &&
+            layout.floor === 0;
           onChange({
             ...feature,
             parent: snap.parent,
             position: snap.position,
             isExit: staysExit,
             outdoorPosition: staysExit ? feature.outdoorPosition : undefined,
-            linkedGraphNodeId: staysExit ? feature.linkedGraphNodeId : undefined,
+            linkedGraphNodeId: staysExit
+              ? feature.linkedGraphNodeId
+              : undefined,
             mainPathVerified: staysExit ? feature.mainPathVerified : undefined,
           });
         }}
@@ -621,13 +760,37 @@ function FloorFeatureShape(props: ShapeProps) {
           strokeWidth={1.2 / viewScale}
         />
         {feature.isExit && (
-          <Text x={5} y={-4} text="EXIT" fontSize={4} fill="#166534" listening={false} />
+          <Text
+            x={5}
+            y={-4}
+            text="EXIT"
+            fontSize={4}
+            fill="#166534"
+            listening={false}
+          />
+        )}
+        {selected && (
+          <Text
+            x={5}
+            y={feature.isExit ? 1 : -7}
+            width={Math.min(44, Math.max(16, feature.name.length * 3))}
+            height={11}
+            text={feature.name}
+            fontSize={4}
+            verticalAlign="middle"
+            fill="#0f172a"
+            listening={false}
+          />
         )}
       </Group>
     );
   }
 
   const size = feature.kind === "point" ? 0 : feature.size;
+  const connectorLabel =
+    feature.kind === "stairs" || feature.kind === "lift"
+      ? centredConnectorLabel(feature, size)
+      : undefined;
   return (
     <Group
       {...common}
@@ -643,7 +806,9 @@ function FloorFeatureShape(props: ShapeProps) {
         if (valid) onChange({ ...feature, ...point });
         else {
           event.target.position({ x: feature.x, y: feature.y });
-          onInvalid("The complete feature must remain inside the floor boundary.");
+          onInvalid(
+            "The complete feature must remain inside the floor boundary.",
+          );
         }
       }}
     >
@@ -666,14 +831,36 @@ function FloorFeatureShape(props: ShapeProps) {
           strokeWidth={1 / viewScale}
         />
       )}
-      <Text
-        x={feature.kind === "point" ? 5 : size / 2 + 2}
-        y={-3}
-        text={feature.name}
-        fontSize={4}
-        fill="#0f172a"
-        listening={false}
-      />
+      {connectorLabel && (
+        <Text
+          x={connectorLabel.x - feature.x}
+          y={connectorLabel.y - feature.y}
+          width={connectorLabel.width}
+          height={connectorLabel.height}
+          text={feature.name}
+          fontSize={connectorLabel.fontSize}
+          align="center"
+          verticalAlign="middle"
+          wrap="word"
+          ellipsis
+          lineHeight={1.02}
+          fill="#ffffff"
+          listening={false}
+        />
+      )}
+      {feature.kind === "point" && selected && (
+        <Text
+          x={5}
+          y={-8}
+          width={Math.min(44, Math.max(14, feature.name.length * 3))}
+          height={12}
+          text={feature.name}
+          fontSize={4}
+          verticalAlign="middle"
+          fill="#0f172a"
+          listening={false}
+        />
+      )}
     </Group>
   );
 }
@@ -682,24 +869,33 @@ function FeatureInspector({
   feature,
   floor,
   verifiedMainNodes,
+  issues,
+  onLinkExit,
   onChange,
   onDelete,
 }: {
   feature: FloorFeature;
   floor: number;
   verifiedMainNodes: VerifiedMainNodeOption[];
+  issues: FloorIssue[];
+  onLinkExit?: (door: DoorFeature) => void;
   onChange: (feature: FloorFeature) => void;
   onDelete: () => void;
 }) {
-  const eligibleExit = feature.kind === "door" && isExitEligible(feature, floor);
+  const eligibleExit =
+    feature.kind === "door" && isExitEligible(feature, floor);
   return (
     <div className="floor-editor__inspector">
-      <strong>{feature.kind === "point" ? "Special point" : feature.kind}</strong>
+      <strong>
+        {feature.kind === "point" ? "Special point" : feature.kind}
+      </strong>
       <label>
         Name
         <input
           value={feature.name}
-          onChange={(event) => onChange({ ...feature, name: event.target.value })}
+          onChange={(event) =>
+            onChange({ ...feature, name: event.target.value })
+          }
         />
       </label>
       {(feature.kind === "stairs" || feature.kind === "lift") && (
@@ -708,7 +904,9 @@ function FeatureInspector({
             Connector ID
             <input
               value={feature.connectorId}
-              onChange={(event) => onChange({ ...feature, connectorId: event.target.value })}
+              onChange={(event) =>
+                onChange({ ...feature, connectorId: event.target.value })
+              }
               placeholder="e.g. north-core"
             />
           </label>
@@ -717,7 +915,14 @@ function FeatureInspector({
             <input
               value={feature.servedFloors.join(", ")}
               onChange={(event) => {
-                const floors = [...new Set(event.target.value.split(",").map(Number).filter(Number.isInteger))];
+                const floors = [
+                  ...new Set(
+                    event.target.value
+                      .split(",")
+                      .map(Number)
+                      .filter(Number.isInteger),
+                  ),
+                ];
                 onChange({ ...feature, servedFloors: floors });
               }}
             />
@@ -734,62 +939,117 @@ function FeatureInspector({
                 onChange({
                   ...feature,
                   isExit: event.target.checked,
-                  outdoorPosition: event.target.checked ? feature.outdoorPosition : undefined,
-                  linkedGraphNodeId: event.target.checked ? feature.linkedGraphNodeId : undefined,
-                  mainPathVerified: event.target.checked ? feature.mainPathVerified : undefined,
+                  outdoorPosition: event.target.checked
+                    ? feature.outdoorPosition
+                    : undefined,
+                  linkedGraphNodeId: event.target.checked
+                    ? feature.linkedGraphNodeId
+                    : undefined,
+                  mainPathVerified: event.target.checked
+                    ? feature.mainPathVerified
+                    : undefined,
                 })
               }
             />
             Mark as exit
           </label>
           {feature.isExit && (
-            <label>
-              Verified main-path connection
-              <select
-                value={feature.linkedGraphNodeId ?? ""}
-                onChange={(event) =>
-                  onChange({
-                    ...feature,
-                    linkedGraphNodeId: event.target.value || undefined,
-                    mainPathVerified: Boolean(event.target.value),
-                  })
-                }
+            <>
+              <button
+                type="button"
+                onClick={() => onLinkExit?.(feature)}
+                disabled={!onLinkExit}
               >
-                <option value="">Select a verified node</option>
-                {verifiedMainNodes.map((node) => (
-                  <option key={node.nodeId} value={node.nodeId}>
-                    {node.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                Link exit on outdoor map
+              </button>
+              <label>
+                Verified main-path connection
+                <select
+                  value={feature.linkedGraphNodeId ?? ""}
+                  onChange={(event) =>
+                    onChange({
+                      ...feature,
+                      linkedGraphNodeId: event.target.value || undefined,
+                      mainPathVerified: Boolean(event.target.value),
+                    })
+                  }
+                >
+                  <option value="">Select a verified node</option>
+                  {verifiedMainNodes.map((node) => (
+                    <option key={node.nodeId} value={node.nodeId}>
+                      {node.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           )}
         </>
       )}
       {feature.kind === "door" && !eligibleExit && (
         <span className="floor-editor__hint">
-          Only a ground-floor door attached to the exterior boundary can be an exit.
+          Only a ground-floor door attached to the exterior boundary can be an
+          exit.
         </span>
       )}
       <button type="button" className="floor-editor__delete" onClick={onDelete}>
         Delete
       </button>
-    </div>
-  );
-}
-
-function IssueList({ issues, notice }: { issues: FloorIssue[]; notice?: string }) {
-  if (!notice && !issues.length) return null;
-  return (
-    <div className="floor-editor__issues" aria-live="polite">
-      {notice && <p>{notice}</p>}
-      {issues.map((issue, index) => (
-        <p key={`${issue.featureId ?? "floor"}-${issue.code}-${index}`} data-severity={issue.severity}>
-          {issue.severity === "error" ? "Error" : "Warning"}: {issue.message}
-        </p>
+      {issues.map((issue) => (
+        <button
+          type="button"
+          className="floor-editor__feature-warning"
+          key={`${issue.code}-${issue.message}`}
+          onClick={() =>
+            feature.kind === "door" && feature.isExit && onLinkExit?.(feature)
+          }
+        >
+          {issue.severity === "error" ? "Error" : "Needs attention"}:{" "}
+          {issue.message}
+        </button>
       ))}
     </div>
   );
 }
 
-export const floorCanvasHostStyle: CSSProperties = { minWidth: 0, overflow: "auto" };
+function IssueList({
+  issues,
+  notice,
+  onFocus,
+}: {
+  issues: FloorIssue[];
+  notice?: string;
+  onFocus: (featureId: string) => void;
+}) {
+  if (!notice && !issues.length) return null;
+  return (
+    <div className="floor-editor__issues" aria-live="polite">
+      {notice && <p>{notice}</p>}
+      {issues.map((issue, index) =>
+        issue.featureId ? (
+          <button
+            type="button"
+            key={`${issue.featureId}-${issue.code}-${index}`}
+            data-severity={issue.severity}
+            onClick={() => onFocus(issue.featureId!)}
+          >
+            {issue.severity === "error" ? "Error" : "Warning"}: {issue.message}{" "}
+            Focus feature
+          </button>
+        ) : (
+          <p
+            key={`floor-${issue.code}-${index}`}
+            data-severity={issue.severity}
+          >
+            {issue.severity === "error" ? "Error" : "Warning"}: {issue.message}
+          </p>
+        ),
+      )}
+    </div>
+  );
+}
+
+export const floorCanvasHostStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: "auto",
+};

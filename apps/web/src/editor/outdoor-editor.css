@@ -1,0 +1,190 @@
+.outdoor-workspace {
+  display: grid;
+  gap: 10px;
+  min-height: calc(100vh - 158px);
+}
+.outdoor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.outdoor-toolbar button {
+  border: 1px solid #b8c5bd;
+  border-radius: 7px;
+  background: white;
+  padding: 8px 11px;
+}
+.outdoor-toolbar .active {
+  background: #163f34;
+  border-color: #163f34;
+  color: white;
+}
+.tool-help {
+  margin: 0;
+  color: #52645b;
+  font-size: 13px;
+}
+.outdoor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 29vw, 410px);
+  gap: 12px;
+  min-height: 610px;
+}
+.outdoor-map {
+  position: relative;
+  overflow: hidden;
+  min-height: 610px;
+  border: 1px solid #cfd9d2;
+  border-radius: 11px;
+  background: #e8eee9;
+}
+.outdoor-inspector {
+  overflow-y: auto;
+  max-height: calc(100vh - 210px);
+  padding: 14px;
+  border: 1px solid #d5ddd7;
+  border-radius: 11px;
+  background: #fff;
+}
+.outdoor-inspector section {
+  padding-top: 10px;
+  border-top: 1px solid #e1e6e2;
+}
+.outdoor-inspector h3 {
+  margin: 5px 0 10px;
+}
+.editor-status {
+  padding: 9px;
+  border-left: 3px solid #176b51;
+  background: #edf7f2;
+  font-size: 13px;
+}
+.readiness {
+  margin-bottom: 12px;
+}
+.readiness dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin: 0;
+}
+.readiness dl div {
+  padding: 7px;
+  border-radius: 7px;
+  background: #f1f5f2;
+}
+.readiness dt {
+  color: #66756d;
+  font-size: 11px;
+}
+.readiness dd {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 750;
+}
+.readiness p {
+  color: #805514;
+  font-size: 12px;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.caution {
+  padding: 8px;
+  border-radius: 7px;
+  background: #fff6df;
+}
+.publish-button {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #9b5a19;
+  border-radius: 7px;
+  background: #fff;
+  color: #713b08;
+  font-weight: 700;
+}
+.publish-button:disabled {
+  opacity: 0.45;
+}
+.candidate-filters {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 5px;
+}
+.candidate-filters input,
+.candidate-filters select,
+.outdoor-inspector select {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #bdc9c1;
+  border-radius: 7px;
+  background: white;
+}
+.compact-candidates {
+  display: grid;
+  max-height: 245px;
+  overflow: auto;
+  margin: 8px 0;
+}
+.compact-candidates button {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid #e0e5e1;
+  background: white;
+  text-align: left;
+}
+.compact-candidates button.selected {
+  background: #edf3ff;
+  box-shadow: inset 3px 0 #315aa9;
+}
+.compact-candidates span {
+  color: #68766e;
+  font-size: 11px;
+}
+.candidate-card {
+  padding: 10px;
+  border: 1px solid #cfd9d2;
+  border-radius: 8px;
+}
+.candidate-card h4,
+.candidate-card p {
+  margin: 3px 0 8px;
+}
+.decision-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.decision-buttons button {
+  padding: 6px;
+  font-size: 11px;
+}
+.edge-checks {
+  display: grid;
+  gap: 5px;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 12px;
+}
+.outdoor-inspector fieldset {
+  border: 1px solid #d5ddd7;
+  border-radius: 7px;
+}
+@media (max-width: 900px) {
+  .outdoor-layout {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .outdoor-map {
+    min-height: 54vh;
+  }
+  .outdoor-inspector {
+    max-height: none;
+  }
+}

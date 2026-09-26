@@ -17,7 +17,15 @@ function layout(): FloorLayout {
     ],
     transform: { origin: [75, 22], xAxis: [0.00001, 0], yAxis: [0, -0.00001] },
     features: [
-      { id: "r", kind: "room", name: "Room", x: 10, y: 10, width: 20, height: 20 },
+      {
+        id: "r",
+        kind: "room",
+        name: "Room",
+        x: 10,
+        y: 10,
+        width: 20,
+        height: 20,
+      },
       {
         id: "exit",
         kind: "door",
@@ -40,11 +48,17 @@ describe("floor boundary correction", () => {
     const correction = correctBoundaryVertex(original, 0, { x: 0, y: 10 });
     expect(correction?.layout.transform).toBe(original.transform);
     expect(correction?.affectedExitIds).toEqual(["exit"]);
-    const exit = correction?.layout.features.find((feature) => feature.id === "exit");
-    expect(exit?.kind === "door" && exit.outdoorPosition).toEqual([75.0005, 21.99995]);
+    const exit = correction?.layout.features.find(
+      (feature) => feature.id === "exit",
+    );
+    expect(exit?.kind === "door" && exit.outdoorPosition).toEqual([
+      75.0005, 21.99995,
+    ]);
   });
 
   it("rejects a correction that would leave a complete room outside", () => {
-    expect(correctBoundaryVertex(layout(), 0, { x: 40, y: 40 })).toBeUndefined();
+    expect(
+      correctBoundaryVertex(layout(), 0, { x: 40, y: 40 }),
+    ).toBeUndefined();
   });
 });

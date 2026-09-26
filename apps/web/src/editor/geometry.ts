@@ -16,6 +16,40 @@ export type DoorSnap = {
   distance: number;
 };
 
+export type CentredLabel = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+};
+
+/** Geometry-derived text box; labels never acquire independently persisted coordinates. */
+export function centredRoomLabel(room: RoomFeature): CentredLabel {
+  const inset = Math.min(3, room.width * 0.08, room.height * 0.08);
+  return {
+    x: room.x + inset,
+    y: room.y + inset,
+    width: Math.max(0, room.width - inset * 2),
+    height: Math.max(0, room.height - inset * 2),
+    fontSize: Math.max(3, Math.min(8, room.height * 0.24, room.width * 0.16)),
+  };
+}
+
+export function centredConnectorLabel(
+  centre: LocalPoint,
+  size: number,
+): CentredLabel {
+  const inset = Math.min(1.5, size * 0.1);
+  return {
+    x: centre.x - size / 2 + inset,
+    y: centre.y - size / 2 + inset,
+    width: Math.max(0, size - inset * 2),
+    height: Math.max(0, size - inset * 2),
+    fontSize: Math.max(2.5, Math.min(5.5, size * 0.22)),
+  };
+}
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -55,16 +89,24 @@ function pointOnSegment(point: LocalPoint, segment: Segment): boolean {
 }
 
 /** Boundary-inclusive point-in-polygon for a simple, possibly concave polygon. */
-export function pointInPolygon(point: LocalPoint, polygon: LocalPoint[]): boolean {
+export function pointInPolygon(
+  point: LocalPoint,
+  polygon: LocalPoint[],
+): boolean {
   if (polygon.length < 3) return false;
-  if (boundaryEdges(polygon).some((edge) => pointOnSegment(point, edge))) return true;
+  if (boundaryEdges(polygon).some((edge) => pointOnSegment(point, edge)))
+    return true;
 
   let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+  for (
+    let index = 0, previous = polygon.length - 1;
+    index < polygon.length;
+    previous = index++
+  ) {
     const a = polygon[index]!;
     const b = polygon[previous]!;
     if (
-      (a.y > point.y) !== (b.y > point.y) &&
+      a.y > point.y !== b.y > point.y &&
       point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
     ) {
       inside = !inside;
@@ -95,9 +137,12 @@ export function roomContainedInBoundary(
 ): boolean {
   if (room.width <= 0 || room.height <= 0 || boundary.length < 3) return false;
   const corners = roomCorners(room);
-  if (!corners.every((corner) => pointInPolygon(corner, boundary))) return false;
+  if (!corners.every((corner) => pointInPolygon(corner, boundary)))
+    return false;
   return !roomEdges(room).some((roomEdge) =>
-    boundaryEdges(boundary).some((boundaryEdge) => properIntersection(roomEdge, boundaryEdge)),
+    boundaryEdges(boundary).some((boundaryEdge) =>
+      properIntersection(roomEdge, boundaryEdge),
+    ),
   );
 }
 
@@ -128,7 +173,8 @@ export function projectPointToSegment(point: LocalPoint, segment: Segment) {
     lengthSquared <= EPSILON
       ? 0
       : clamp(
-          ((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy) /
+          ((point.x - segment.start.x) * dx +
+            (point.y - segment.start.y) * dy) /
             lengthSquared,
           0,
           1,
@@ -148,9 +194,11 @@ export function doorParentSegment(
   parent: DoorParent,
   layout: Pick<FloorLayout, "boundary" | "features">,
 ): Segment | undefined {
-  if (parent.kind === "exterior") return boundaryEdges(layout.boundary)[parent.edgeIndex];
+  if (parent.kind === "exterior")
+    return boundaryEdges(layout.boundary)[parent.edgeIndex];
   const room = layout.features.find(
-    (feature): feature is RoomFeature => feature.kind === "room" && feature.id === parent.roomId,
+    (feature): feature is RoomFeature =>
+      feature.kind === "room" && feature.id === parent.roomId,
   );
   return room ? roomEdges(room)[parent.edgeIndex] : undefined;
 }
@@ -237,4 +285,3 @@ export function polygonIsValid(boundary: LocalPoint[]): boolean {
     }),
   );
 }
-

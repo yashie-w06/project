@@ -25,16 +25,16 @@ Copying is unnecessary in this repository because ignored dummy `.env` files are
 
 API variables:
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL URL; use Railway's public URL from Windows and Railway's service reference in production |
-| `EDITOR_EMAIL` | Single designated editor account |
-| `EDITOR_PASSWORD` | Local-only password; production should prefer `EDITOR_PASSWORD_HASH` |
-| `EDITOR_PASSWORD_HASH` | Optional Argon2 hash, preferred in production |
-| `EDITOR_TOKEN_SECRET` | Random secret of at least 32 characters |
-| `WEB_ORIGIN` | Exact allowed frontend origin, such as `http://localhost:5173` |
-| `PORT` | API listener port; Railway supplies this |
-| `SNAP_RADIUS_METRES` | Optional outdoor pick snap limit, default 25 |
+| Variable               | Purpose                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | PostgreSQL URL; use Railway's public URL from Windows and Railway's service reference in production |
+| `EDITOR_EMAIL`         | Single designated editor account                                                                    |
+| `EDITOR_PASSWORD`      | Local-only password; production should prefer `EDITOR_PASSWORD_HASH`                                |
+| `EDITOR_PASSWORD_HASH` | Optional Argon2 hash, preferred in production                                                       |
+| `EDITOR_TOKEN_SECRET`  | Random secret of at least 32 characters                                                             |
+| `WEB_ORIGIN`           | Exact allowed frontend origin, such as `http://localhost:5173`                                      |
+| `PORT`                 | API listener port; Railway supplies this                                                            |
+| `SNAP_RADIUS_METRES`   | Optional outdoor pick snap limit, default 25                                                        |
 
 Web variable: `VITE_API_URL=http://localhost:3001`.
 
@@ -107,3 +107,5 @@ Focused tests cover deterministic OSM import, immutable candidates, metric snapp
 - The imported highway candidates require on-site/editor verification before any live route is published. An unavailable or disconnected verified graph correctly returns no route.
 
 The current candidate checklist and exact endpoint coordinates are in [`docs/field-verification.md`](docs/field-verification.md). Until its internal paths are physically classified, the production graph must remain empty rather than fabricate coverage.
+
+The completed repair audit, root causes, live-data correction, browser coverage, and deployment handoff are documented in [`docs/repair-findings.md`](docs/repair-findings.md). The editor now supports map-first building/floor selection, reloadable versioned drafts, guarded exit linking, and alert resolution. Real campus locations remain intentionally unroutable until the separate field survey is completed.

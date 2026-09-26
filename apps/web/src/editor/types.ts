@@ -54,10 +54,7 @@ export type ConnectorFeature = FeatureBase & {
 };
 
 export type FloorFeature =
-  | RoomFeature
-  | DoorFeature
-  | SpecialPointFeature
-  | ConnectorFeature;
+  RoomFeature | DoorFeature | SpecialPointFeature | ConnectorFeature;
 
 export type FloorLayout = {
   buildingId: string;
@@ -92,4 +89,3 @@ export type FloorIssue = {
   message: string;
   featureId?: string;
 };
-

@@ -1,0 +1,111 @@
+.public-route-panel h2 {
+  margin: 18px 0 12px;
+}
+.public-route-panel .steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+.public-route-panel .steps button,
+.public-route-panel .steps span {
+  border: 0;
+  border-bottom: 3px solid #d9dfdb;
+  background: transparent;
+  color: #77827b;
+  padding: 8px 5px;
+  text-align: left;
+  font-size: 12px;
+}
+.public-route-panel .steps .active {
+  border-color: #c58d26;
+  color: #5f4210;
+}
+.public-route-panel .steps .done {
+  border-color: #167055;
+  color: #16543f;
+}
+.confirmed-summary {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+.confirmed-summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #edf6f1;
+}
+.confirmed-summary span {
+  display: grid;
+  font-size: 13px;
+}
+.confirmed-summary b {
+  color: #456257;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.confirmed-summary button,
+.gps-button,
+.note-toggle {
+  border: 1px solid #b7c4bb;
+  background: white;
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: #16543f;
+}
+.search-results button > span:first-child {
+  display: grid;
+}
+.search-results button small {
+  text-transform: capitalize;
+}
+.selection-card {
+  margin: 12px 0;
+  padding: 13px;
+  border-radius: 10px;
+  border: 1px solid #d7b66d;
+  background: #fffaf0;
+}
+.selection-card h3 {
+  margin: 5px 0;
+}
+.selection-card p {
+  margin: 4px 0 9px;
+  font-size: 13px;
+  color: #56645d;
+}
+.selection-kicker {
+  color: #815e17;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.selection-warning {
+  color: #9a332c !important;
+}
+.gps-button {
+  width: 100%;
+  margin: 5px 0;
+}
+.map-note {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #dce3de;
+}
+.note-toggle {
+  width: 100%;
+}
+.route-controls .back,
+.choice-step > .back {
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .public-route-panel .steps button,
+  .public-route-panel .steps span {
+    font-size: 11px;
+  }
+}

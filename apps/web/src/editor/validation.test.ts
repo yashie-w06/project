@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DoorFeature, FloorLayout } from "./types";
-import { floorToMap, mapToFloor } from "./transform";
+import { floorToMap, mapToFloor, screenToFloorPoint } from "./transform";
 import { isExitEligible, validateFloorLayout } from "./validation";
 
 function baseLayout(features: FloorLayout["features"] = []): FloorLayout {
@@ -47,6 +47,17 @@ describe("floor-to-map transform", () => {
     expect(mapToFloor(map, layout.transform)?.x).toBeCloseTo(local.x, 7);
     expect(mapToFloor(map, layout.transform)?.y).toBeCloseTo(local.y, 7);
   });
+
+  it("inverse-transforms pointer positions after simultaneous pan and zoom", () => {
+    const local = screenToFloorPoint(
+      { x: 330, y: 245 },
+      { x: 30, y: -5, scale: 2.5 },
+    );
+    expect(local).toEqual({ x: 120, y: 100 });
+    expect(
+      screenToFloorPoint({ x: 1, y: 1 }, { x: 0, y: 0, scale: 0 }),
+    ).toBeUndefined();
+  });
 });
 
 describe("exit validation", () => {
@@ -54,25 +65,48 @@ describe("exit validation", () => {
     expect(isExitEligible(exteriorDoor(), 0)).toBe(true);
     expect(isExitEligible(exteriorDoor(), 1)).toBe(false);
     expect(
-      isExitEligible({ ...exteriorDoor(), parent: { kind: "room", roomId: "r1", edgeIndex: 0 } }, 0),
+      isExitEligible(
+        {
+          ...exteriorDoor(),
+          parent: { kind: "room", roomId: "r1", edgeIndex: 0 },
+        },
+        0,
+      ),
     ).toBe(false);
   });
 
   it("requires outdoor coordinates and a verified main-node link on publish", () => {
-    const issues = validateFloorLayout(baseLayout([exteriorDoor({ isExit: true })]), [], true);
+    const issues = validateFloorLayout(
+      baseLayout([exteriorDoor({ isExit: true })]),
+      [],
+      true,
+    );
     expect(issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining(["exit-outdoor-position-missing", "exit-main-path-missing"]),
+      expect.arrayContaining([
+        "exit-outdoor-position-missing",
+        "exit-main-path-missing",
+      ]),
     );
     expect(issues.every((issue) => issue.severity === "error")).toBe(true);
   });
 
   it("rejects a room door marked as an exit", () => {
-    const room = { id: "r1", kind: "room" as const, name: "R", x: 10, y: 10, width: 20, height: 20 };
+    const room = {
+      id: "r1",
+      kind: "room" as const,
+      name: "R",
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 20,
+    };
     const door = exteriorDoor({
       isExit: true,
       parent: { kind: "room", roomId: room.id, edgeIndex: 0 },
     });
-    const codes = validateFloorLayout(baseLayout([room, door]), [], true).map((issue) => issue.code);
+    const codes = validateFloorLayout(baseLayout([room, door]), [], true).map(
+      (issue) => issue.code,
+    );
     expect(codes).toContain("invalid-exit-parent");
   });
 });
@@ -91,12 +125,16 @@ describe("connector completeness", () => {
     };
     const draft = validateFloorLayout(baseLayout([lift]), [], false);
     const publishing = validateFloorLayout(baseLayout([lift]), [], true);
-    expect(draft.filter((issue) => issue.code === "connector-placement-missing")).toHaveLength(2);
-    expect(draft.find((issue) => issue.code === "connector-placement-missing")?.severity).toBe(
-      "warning",
-    );
-    expect(publishing.find((issue) => issue.code === "connector-placement-missing")?.severity).toBe(
-      "error",
-    );
+    expect(
+      draft.filter((issue) => issue.code === "connector-placement-missing"),
+    ).toHaveLength(2);
+    expect(
+      draft.find((issue) => issue.code === "connector-placement-missing")
+        ?.severity,
+    ).toBe("warning");
+    expect(
+      publishing.find((issue) => issue.code === "connector-placement-missing")
+        ?.severity,
+    ).toBe("error");
   });
 });

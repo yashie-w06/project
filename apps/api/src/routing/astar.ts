@@ -30,27 +30,52 @@ function reconstruct(
   const arcs = reversedArcs.reverse();
   const coordinates: LonLat[] = [];
   for (const arc of arcs) {
-    coordinates.push(...(coordinates.length === 0 ? arc.coordinates : arc.coordinates.slice(1)));
+    if (coordinates.length > 0) {
+      const previous = coordinates.at(-1)!;
+      const next = arc.coordinates[0]!;
+      if (previous[0] !== next[0] || previous[1] !== next[1]) {
+        throw new Error(
+          `Discontinuous route geometry at node ${arc.fromNodeId}`,
+        );
+      }
+    }
+    coordinates.push(
+      ...(coordinates.length === 0
+        ? arc.coordinates
+        : arc.coordinates.slice(1)),
+    );
   }
-  if (coordinates.length === 0) coordinates.push(graph.nodes.get(startId)!.coordinates);
+  if (coordinates.length === 0)
+    coordinates.push(graph.nodes.get(startId)!.coordinates);
   return Object.freeze({
     nodeIds: Object.freeze(reversedNodes.reverse()),
     edgeIds: Object.freeze(arcs.map((arc) => arc.edgeId)),
     geometry: Object.freeze({
       type: "LineString",
-      coordinates: coordinates.map(([longitude, latitude]) => [longitude, latitude]),
+      coordinates: coordinates.map(([longitude, latitude]) => [
+        longitude,
+        latitude,
+      ]),
     }),
     internalCostMetres: cost,
   });
 }
 
-export function findRoute(graph: RoutingGraph, startId: string, goalId: string): RouteResult | null {
+export function findRoute(
+  graph: RoutingGraph,
+  startId: string,
+  goalId: string,
+): RouteResult | null {
   const start = graph.nodes.get(startId);
   const goal = graph.nodes.get(goalId);
   if (!start || !goal) return null;
   const projection = createLocalProjection(goal.coordinates);
   const heuristic = (nodeId: string): number =>
-    distanceMetres(graph.nodes.get(nodeId)!.coordinates, goal.coordinates, projection);
+    distanceMetres(
+      graph.nodes.get(nodeId)!.coordinates,
+      goal.coordinates,
+      projection,
+    );
   const open = new Set([startId]);
   const cameFrom = new Map<string, { nodeId: string; arc: GraphArc }>();
   const gScore = new Map<string, number>([[startId, 0]]);
@@ -58,10 +83,18 @@ export function findRoute(graph: RoutingGraph, startId: string, goalId: string):
 
   while (open.size > 0) {
     const current = [...open].sort((a, b) => {
-      const difference = (fScore.get(a) ?? Infinity) - (fScore.get(b) ?? Infinity);
+      const difference =
+        (fScore.get(a) ?? Infinity) - (fScore.get(b) ?? Infinity);
       return difference || a.localeCompare(b);
     })[0]!;
-    if (current === goalId) return reconstruct(graph, startId, goalId, cameFrom, gScore.get(current)!);
+    if (current === goalId)
+      return reconstruct(
+        graph,
+        startId,
+        goalId,
+        cameFrom,
+        gScore.get(current)!,
+      );
     open.delete(current);
     for (const arc of graph.adjacency.get(current) ?? []) {
       const tentative = gScore.get(current)! + arc.cost;

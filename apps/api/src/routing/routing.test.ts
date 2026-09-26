@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { LonLat } from "../osm/types.js";
 import { findRoute } from "./astar.js";
-import { snapToEdge, snapToVerifiedEdges, splitEdgeAtSnap } from "./geometry.js";
-import { buildRoutingGraph, InvalidGraphError } from "./graph.js";
+import {
+  snapToEdge,
+  snapToVerifiedEdges,
+  splitEdgeAtSnap,
+} from "./geometry.js";
+import {
+  buildRoutingGraph,
+  connectedComponents,
+  InvalidGraphError,
+} from "./graph.js";
 import { createLocalProjection, distanceMetres } from "./projection.js";
-import type { ActiveBlock, RouteEdge, RouteNode, TravelProfile } from "./types.js";
+import type {
+  ActiveBlock,
+  RouteEdge,
+  RouteNode,
+  TravelProfile,
+} from "./types.js";
 
 const coordinate = (longitudeOffset: number, latitudeOffset = 0): LonLat =>
   [75.87 + longitudeOffset, 22.725 + latitudeOffset] as const;
@@ -41,8 +54,15 @@ const edges: RouteEdge[] = [
   },
 ];
 
-function route(profile: TravelProfile, activeBlocks: readonly ActiveBlock[] = []) {
-  return findRoute(buildRoutingGraph({ nodes, edges, profile, activeBlocks }), "a", "c");
+function route(
+  profile: TravelProfile,
+  activeBlocks: readonly ActiveBlock[] = [],
+) {
+  return findRoute(
+    buildRoutingGraph({ nodes, edges, profile, activeBlocks }),
+    "a",
+    "c",
+  );
 }
 
 test("A* uses verified bidirectional main and profile-compatible shortcut edges", () => {
@@ -50,7 +70,11 @@ test("A* uses verified bidirectional main and profile-compatible shortcut edges"
   assert.deepEqual(route("heavy_luggage")?.edgeIds, ["main-ab", "shortcut-bc"]);
   assert.equal(route("wheelchair"), null);
 
-  const reverse = findRoute(buildRoutingGraph({ nodes, edges, profile: "healthy" }), "c", "a");
+  const reverse = findRoute(
+    buildRoutingGraph({ nodes, edges, profile: "healthy" }),
+    "c",
+    "a",
+  );
   assert.deepEqual(reverse?.edgeIds, ["shortcut-bc", "main-ab"]);
   assert.deepEqual(reverse?.geometry.coordinates[0], nodes[2]!.coordinates);
 });
@@ -64,7 +88,11 @@ test("effective active blocks exclude an edge for every profile and unblocking r
 });
 
 test("graph rejects dangling endpoints and geometry that merely crosses or approaches a node", () => {
-  const dangling: RouteEdge = { ...edges[0]!, id: "dangling", toNodeId: "absent" };
+  const dangling: RouteEdge = {
+    ...edges[0]!,
+    id: "dangling",
+    toNodeId: "absent",
+  };
   assert.throws(
     () => buildRoutingGraph({ nodes, edges: [dangling], profile: "healthy" }),
     InvalidGraphError,
@@ -75,7 +103,12 @@ test("graph rejects dangling endpoints and geometry that merely crosses or appro
     coordinates: [coordinate(0.00001), nodes[1]!.coordinates],
   };
   assert.throws(
-    () => buildRoutingGraph({ nodes, edges: [nearButNotExplicit], profile: "healthy" }),
+    () =>
+      buildRoutingGraph({
+        nodes,
+        edges: [nearButNotExplicit],
+        profile: "healthy",
+      }),
     /does not start/,
   );
 });
@@ -100,7 +133,11 @@ test("bounded segment snapping uses metres and topology-preserving split geometr
     edges: [...split.edges, edges[1]!],
     profile: "healthy",
   });
-  assert.deepEqual(findRoute(graph, "a", "c")?.edgeIds, ["ab-1", "ab-2", "shortcut-bc"]);
+  assert.deepEqual(findRoute(graph, "a", "c")?.edgeIds, [
+    "ab-1",
+    "ab-2",
+    "shortcut-bc",
+  ]);
 });
 
 test("multi-edge snapping ignores unverified graph material", () => {
@@ -108,16 +145,176 @@ test("multi-edge snapping ignores unverified graph material", () => {
   const point = coordinate(0.0015, 0.00001);
   const snapped = snapToVerifiedEdges(point, edges, nodeMap, 3);
   assert.equal(snapped?.edgeId, "shortcut-bc");
+  assert.equal(snapToVerifiedEdges(point, [edges[2]!], nodeMap, 10), null);
+});
+
+test("two interior snaps on the same edge produce only the partial continuous route", () => {
+  let mutableNodes = nodes.slice(0, 2);
+  let mutableEdges = [edges[0]!];
+  const startPoint = coordinate(0.00025, 0.00001);
+  const destinationPoint = coordinate(0.00075, -0.00001);
+
+  const addVirtualNode = (point: LonLat, role: string): string => {
+    const map = new Map(mutableNodes.map((node) => [node.id, node]));
+    const snap = snapToVerifiedEdges(point, mutableEdges, map, 3, {
+      profile: "healthy",
+    });
+    assert.ok(snap);
+    const source = mutableEdges.find((edge) => edge.id === snap.edgeId)!;
+    const split = splitEdgeAtSnap(
+      source,
+      snap,
+      role,
+      `${source.id}-${role}-a`,
+      `${source.id}-${role}-b`,
+    );
+    mutableNodes = [...mutableNodes, split.node];
+    mutableEdges = [
+      ...mutableEdges.filter((edge) => edge.id !== source.id),
+      ...split.edges,
+    ];
+    return role;
+  };
+
+  const startId = addVirtualNode(startPoint, "start");
+  const destinationId = addVirtualNode(destinationPoint, "destination");
+  const result = findRoute(
+    buildRoutingGraph({
+      nodes: mutableNodes,
+      edges: mutableEdges,
+      profile: "healthy",
+    }),
+    startId,
+    destinationId,
+  );
+  assert.ok(result);
+  assert.deepEqual(
+    result.geometry.coordinates[0],
+    mutableNodes.find((node) => node.id === startId)!.coordinates,
+  );
+  assert.deepEqual(
+    result.geometry.coordinates.at(-1),
+    mutableNodes.find((node) => node.id === destinationId)!.coordinates,
+  );
+  assert.ok(result.internalCostMetres > 50 && result.internalCostMetres < 60);
+  assert.equal(result.edgeIds.length, 1);
+
+  const reverse = findRoute(
+    buildRoutingGraph({
+      nodes: mutableNodes,
+      edges: mutableEdges,
+      profile: "healthy",
+    }),
+    destinationId,
+    startId,
+  );
+  assert.ok(reverse);
+  assert.deepEqual(
+    reverse.geometry.coordinates[0],
+    result.geometry.coordinates.at(-1),
+  );
+  assert.deepEqual(
+    reverse.geometry.coordinates.at(-1),
+    result.geometry.coordinates[0],
+  );
+  assert.equal(reverse.edgeIds.length, 1);
+});
+
+test("component diagnostics distinguish disconnected verified paths", () => {
+  const isolated: RouteNode = {
+    id: "isolated",
+    coordinates: coordinate(0.003),
+  };
+  const graph = buildRoutingGraph({
+    nodes: [...nodes.slice(0, 2), isolated],
+    edges: [edges[0]!],
+    profile: "healthy",
+  });
+  const diagnostics = connectedComponents(graph);
+  assert.equal(diagnostics.components.length, 2);
   assert.equal(
-    snapToVerifiedEdges(point, [edges[2]!], nodeMap, 10),
+    diagnostics.componentByNodeId.get("a"),
+    diagnostics.componentByNodeId.get("b"),
+  );
+  assert.notEqual(
+    diagnostics.componentByNodeId.get("a"),
+    diagnostics.componentByNodeId.get("isolated"),
+  );
+  assert.equal(findRoute(graph, "a", "isolated"), null);
+});
+
+test("snapping applies the same profile and active-block eligibility as graph construction", () => {
+  const map = new Map(nodes.map((node) => [node.id, node]));
+  const nearShortcut = coordinate(0.0015, 0.00001);
+  assert.equal(
+    snapToVerifiedEdges(nearShortcut, edges, map, 3, { profile: "wheelchair" }),
     null,
   );
+  assert.equal(
+    snapToVerifiedEdges(nearShortcut, edges, map, 3, {
+      profile: "healthy",
+      activeBlocks: [{ active: true, edgeIds: ["shortcut-bc"] }],
+    }),
+    null,
+  );
+  assert.equal(
+    snapToVerifiedEdges(nearShortcut, edges, map, 3, {
+      profile: "heavy_luggage",
+      activeBlocks: [{ active: false, edgeIds: ["shortcut-bc"] }],
+    })?.edgeId,
+    "shortcut-bc",
+  );
+});
+
+test("graph normalizes tolerated endpoint offsets so multi-edge output is exactly continuous", () => {
+  const tinyOffset = coordinate(0.001, 0.000001);
+  const offsetEdge: RouteEdge = {
+    ...edges[1]!,
+    coordinates: [tinyOffset, nodes[2]!.coordinates],
+  };
+  const graph = buildRoutingGraph({
+    nodes,
+    edges: [edges[0]!, offsetEdge],
+    profile: "healthy",
+    endpointToleranceMetres: 0.2,
+  });
+  const result = findRoute(graph, "a", "c");
+  assert.ok(result);
+  const junctionOccurrences = result.geometry.coordinates.filter(
+    ([longitude, latitude]) =>
+      longitude === nodes[1]!.coordinates[0] &&
+      latitude === nodes[1]!.coordinates[1],
+  );
+  assert.equal(junctionOccurrences.length, 1);
+});
+
+test("non-finite graph and snap coordinates are rejected instead of emitting invalid GeoJSON", () => {
+  const invalidNode: RouteNode = {
+    id: "bad",
+    coordinates: [Number.NaN, 22.725],
+  };
+  assert.throws(
+    () =>
+      buildRoutingGraph({
+        nodes: [invalidNode],
+        edges: [],
+        profile: "healthy",
+      }),
+    /invalid coordinates/,
+  );
+  const map = new Map(nodes.map((node) => [node.id, node]));
+  assert.equal(snapToEdge([Number.NaN, 22.725], edges[0]!, map, 10), null);
 });
 
 test("local projection round trips and reports campus-scale distance", () => {
   const projection = createLocalProjection(nodes[0]!.coordinates);
   const projected = projection.project(nodes[1]!.coordinates);
   const roundTrip = projection.unproject(projected);
-  assert.ok(distanceMetres(roundTrip, nodes[1]!.coordinates, projection) < 1e-6);
-  assert.ok(distanceMetres(nodes[0]!.coordinates, nodes[1]!.coordinates, projection) > 100);
+  assert.ok(
+    distanceMetres(roundTrip, nodes[1]!.coordinates, projection) < 1e-6,
+  );
+  assert.ok(
+    distanceMetres(nodes[0]!.coordinates, nodes[1]!.coordinates, projection) >
+      100,
+  );
 });
