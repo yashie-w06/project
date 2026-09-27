@@ -95,6 +95,7 @@ function renderEditor() {
   editor.mockImplementation(
     async (path: string, _token: string, init?: RequestInit) => {
       if (path === "/graph") return graph;
+      if (path === "/obstacles") return { obstacles: [] };
       if (path.startsWith("/paths/p-main") && init?.body) {
         const patch = JSON.parse(String(init.body));
         Object.assign(graph.paths[0]!, patch, {

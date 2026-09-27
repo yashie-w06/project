@@ -1,9 +1,5 @@
 import type { LonLat } from "../osm/types.js";
-import {
-  createLocalProjection,
-  distanceMetres,
-  polylineLengthMetres,
-} from "./projection.js";
+import { createLocalProjection, distanceMetres } from "./projection.js";
 import type {
   ActiveBlock,
   RouteEdge,
@@ -137,7 +133,11 @@ export function buildRoutingGraph(input: {
       !edgeEligibleForProfile(edge, input.profile)
     )
       continue;
-    const policy = evaluateEdge(edge, input.profile, input.allowUnknownWheelchair ?? true);
+    const policy = evaluateEdge(
+      edge,
+      input.profile,
+      input.allowUnknownWheelchair ?? true,
+    );
     if (!policy.eligible) continue;
     const from = nodes.get(edge.fromNodeId);
     const to = nodes.get(edge.toNodeId);
@@ -168,9 +168,9 @@ export function buildRoutingGraph(input: {
     // Endpoint discrepancies within the editor tolerance are normalized to the shared node.
     // This guarantees exact GeoJSON continuity without inventing a topological connection.
     const coordinates = normalizedCoordinates(edge, from, to);
-    const length = polylineLengthMetres(coordinates, projection);
     const status = edge.status === "provisional" ? "provisional" : "confirmed";
-    const cost = policy.cost +
+    const cost =
+      policy.cost +
       (status === "provisional" ? (input.provisionalPenaltyMetres ?? 2) : 0);
     if (!(cost > 0))
       throw new InvalidGraphError(`Edge ${edge.id} has zero length`);

@@ -23,7 +23,8 @@ export type NoRouteCode =
   | "DEST_UNREACHABLE"
   | "NO_PLAUSIBLE_APPROACH"
   | "DIFFERENT_COMPONENTS"
-  | "BLOCKED_OR_INELIGIBLE";
+  | "BLOCKED_OR_INELIGIBLE"
+  | "NO_SUITABLE_WHEELCHAIR_ROUTE";
 type RouteResult =
   | {
       status: "ok";
@@ -34,6 +35,11 @@ type RouteResult =
         pathId: string;
         kind: "main" | "shortcut";
         note: string | null;
+        source?: "editor" | "osm" | "query";
+        sourceId?: string;
+        accessibility?: Record<string, string | number | null>;
+        unknown?: readonly string[];
+        constraints?: readonly string[];
       }>;
       approaches: Array<{
         role: "start" | "destination";
@@ -44,12 +50,19 @@ type RouteResult =
       }>;
       selectedEntranceDoorId?: string;
       snaps?: unknown[];
+      networkRevision?: string;
     }
   | {
       status: "no_route";
       code: NoRouteCode;
       message: string;
       notices: string[];
+      networkRevision?: string;
+    }
+  | {
+      status: "route_changed";
+      message: string;
+      networkRevision: string;
     };
 export type RouteResolver = (input: {
   profile: TravelProfile;
@@ -69,7 +82,7 @@ export function publicRoutes(
 
   router.get("/map", async (_request, response, next) => {
     try {
-      const [buildings, paths, points, alerts] = await Promise.all([
+      const [buildings, paths, points, alerts, network] = await Promise.all([
         db.query("SELECT id, name, footprint FROM buildings ORDER BY name"),
         loadStoredPathFeatures(db),
         db.query(
@@ -78,6 +91,7 @@ export function publicRoutes(
         db.query(
           "SELECT id,longitude,latitude,description FROM alerts ORDER BY created_at DESC",
         ),
+        loadEffectiveNetworkState(db),
       ]);
       const buildingFeatures = buildings.rows.map((row): Feature<Polygon> => ({
         type: "Feature",
@@ -93,14 +107,22 @@ export function publicRoutes(
       }));
       response.json({
         buildings: collection(buildingFeatures),
-        paths: collection(paths.map(pathAsFeature)),
+        paths: collection(
+          paths.map((path) => {
+            const feature = pathAsFeature(path);
+            feature.properties.blocked = network.blockedPathIds.includes(
+              path.id,
+            );
+            return feature;
+          }),
+        ),
         points: collection(pointFeatures),
         alerts: alerts.rows.map((row) => ({
           id: row.id,
           coordinates: [row.longitude, row.latitude],
           description: row.description,
         })),
-        ...(await loadEffectiveNetworkState(db)),
+        ...network,
       });
     } catch (error) {
       next(error);

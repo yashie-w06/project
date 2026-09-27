@@ -78,6 +78,13 @@ const pathPatchSchema = z
     version: z.number().int().positive(),
   })
   .refine((value) => value.blocked !== undefined || value.note !== undefined);
+const obstacleSchema = z.object({
+  reason: z.string().trim().min(1).max(240),
+  affectedPathIds: z.array(z.string().min(1).max(120)).min(1).max(100),
+  expiresInMinutes: z
+    .union([z.literal(30), z.literal(120), z.literal(1440), z.null()])
+    .optional(),
+});
 const shortcutSchema = z.object({
   id: z.string().uuid(),
   coordinates: z.array(coordinateSchema).min(2).max(500),
@@ -419,6 +426,68 @@ export function editorRoutes(
       response.json(updated.rows[0]);
     } catch (e) {
       next(e);
+    }
+  });
+
+  router.get("/obstacles", async (_request, response, next) => {
+    try {
+      const result = await db.query(
+        `SELECT id,reason,affected_path_ids,created_at,expires_at
+         FROM route_obstacles
+         WHERE deactivated_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+         ORDER BY created_at DESC,id`,
+      );
+      response.json({ obstacles: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/obstacles", async (request, response, next) => {
+    const parsed = obstacleSchema.safeParse(request.body);
+    if (!parsed.success)
+      return response.status(400).json({
+        error: "Invalid temporary obstacle",
+        details: parsed.error.flatten(),
+      });
+    const value = parsed.data;
+    const pathIds = [...new Set(value.affectedPathIds)];
+    try {
+      const mapped = await loadStoredPathFeatures(db);
+      const knownPathIds = new Set(mapped.map((path) => path.id));
+      const unknown = pathIds.filter((id) => !knownPathIds.has(id));
+      if (unknown.length)
+        return response.status(400).json({
+          error: "Every obstacle must reference a mapped path",
+          affectedIds: unknown,
+        });
+      const id = randomUUID();
+      const result = await db.query(
+        `INSERT INTO route_obstacles(id,reason,affected_path_ids,expires_at)
+         VALUES($1,$2,$3,CASE WHEN $4::int IS NULL THEN NULL ELSE now()+($4 * interval '1 minute') END)
+         RETURNING id,reason,affected_path_ids,created_at,expires_at`,
+        [id, value.reason, pathIds, value.expiresInMinutes ?? null],
+      );
+      onGraphChange();
+      response.status(201).json(result.rows[0]);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/obstacles/:id", async (request, response, next) => {
+    try {
+      const result = await db.query(
+        `UPDATE route_obstacles SET deactivated_at=now()
+         WHERE id=$1 AND deactivated_at IS NULL RETURNING id`,
+        [request.params.id],
+      );
+      if (!result.rowCount)
+        return response.status(404).json({ error: "Unknown active obstacle" });
+      onGraphChange();
+      response.status(204).end();
+    } catch (error) {
+      next(error);
     }
   });
 

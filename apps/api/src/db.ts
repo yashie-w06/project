@@ -18,7 +18,11 @@ export function createDatabase(config: Config): Database {
 export async function checkDatabase(db: Database): Promise<boolean> {
   try {
     await db.query("SELECT 1");
-    return true;
+    const result = await db.query(
+      `SELECT to_regclass('public.route_obstacles') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM schema_migrations WHERE filename='004_accessibility_obstacles.sql') AS ready`,
+    );
+    return result.rows[0]?.ready === true;
   } catch {
     return false;
   }

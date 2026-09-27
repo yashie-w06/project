@@ -186,6 +186,7 @@ describe("simplified public map", () => {
           ],
           source: "osm",
           sourceId: "path-1",
+          kind: "main",
           note: "Use the shaded side",
         },
       ],
@@ -193,6 +194,7 @@ describe("simplified public map", () => {
     expect(result.segments.features[0]?.properties).toMatchObject({
       source: "osm",
       sourceId: "path-1",
+      kind: "main",
       note: "Use the shaded side",
     });
     expect(visitorReason("DIFFERENT_COMPONENTS")).toContain("do not connect");

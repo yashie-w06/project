@@ -22,6 +22,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   map: () => request<CampusMapData>("/api/map"),
+  networkState: () =>
+    request<{ revision: string; blockedPathIds: string[] }>(
+      "/api/network-state",
+    ),
   buildings: () =>
     request<{
       buildings: Array<{

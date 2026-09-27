@@ -39,6 +39,13 @@ type OutdoorAlert = {
   version: number;
   pathIds?: string[];
 };
+type ActiveObstacle = {
+  id: string;
+  reason: string;
+  affected_path_ids: string[];
+  created_at: string;
+  expires_at: string | null;
+};
 type GraphData = {
   paths: PathFeature[];
   points: OutdoorPoint[];
@@ -79,15 +86,20 @@ export function OutdoorEditor({ token }: { token: string }) {
   const [alertPosition, setAlertPosition] = useState<Coordinate>();
   const [alertNote, setAlertNote] = useState("");
   const [selectedAlertId, setSelectedAlertId] = useState("");
+  const [obstacles, setObstacles] = useState<ActiveObstacle[]>([]);
+  const [obstacleReason, setObstacleReason] = useState("");
+  const [obstacleExpiry, setObstacleExpiry] = useState("120");
 
   const reload = async () => {
     try {
-      const [graph, map] = await Promise.all([
+      const [graph, map, activeObstacles] = await Promise.all([
         api.editor<GraphData>("/graph", token),
         api.map(),
+        api.editor<{ obstacles: ActiveObstacle[] }>("/obstacles", token),
       ]);
       setData(graph);
       setMapData(map as MapData);
+      setObstacles(activeObstacles.obstacles);
       setError("");
       return graph;
     } catch (cause) {
@@ -216,6 +228,54 @@ export function OutdoorEditor({ token }: { token: string }) {
         cause instanceof Error
           ? cause.message
           : "Path status could not be saved",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function publishObstacle() {
+    if (!selectedPath || !obstacleReason.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.editor("/obstacles", token, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: obstacleReason.trim(),
+          affectedPathIds: [selectedPath.id],
+          expiresInMinutes:
+            obstacleExpiry === "never" ? null : Number(obstacleExpiry),
+        }),
+      });
+      await reload();
+      setObstacleReason("");
+      setStatus("Temporary obstruction published for this path.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Obstruction could not be published",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deactivateObstacle(id: string) {
+    setSaving(true);
+    setError("");
+    try {
+      await api.editor(`/obstacles/${encodeURIComponent(id)}`, token, {
+        method: "DELETE",
+      });
+      await reload();
+      setStatus("Temporary obstruction removed.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Obstruction could not be removed",
       );
     } finally {
       setSaving(false);
@@ -544,6 +604,67 @@ export function OutdoorEditor({ token }: { token: string }) {
                   Remove note
                 </button>
               </div>
+              <section
+                className="path-obstacle"
+                aria-label="Temporary obstruction"
+              >
+                <h4>Temporary obstruction</h4>
+                <p className="muted">
+                  This publishes a route block for the selected path. A map
+                  alert or visitor note alone never blocks routing.
+                </p>
+                <label className="field">
+                  Reason
+                  <input
+                    value={obstacleReason}
+                    maxLength={240}
+                    onChange={(event) => setObstacleReason(event.target.value)}
+                    placeholder="Path closed for maintenance"
+                  />
+                </label>
+                <label className="field">
+                  Expires
+                  <select
+                    aria-label="Obstruction expiry"
+                    value={obstacleExpiry}
+                    onChange={(event) => setObstacleExpiry(event.target.value)}
+                  >
+                    <option value="30">30 minutes</option>
+                    <option value="120">2 hours</option>
+                    <option value="1440">1 day</option>
+                    <option value="never">No expiry</option>
+                  </select>
+                </label>
+                <button
+                  className="primary full"
+                  disabled={saving || !obstacleReason.trim()}
+                  onClick={() => void publishObstacle()}
+                >
+                  {saving ? "Publishing…" : "Publish obstruction"}
+                </button>
+                {obstacles
+                  .filter((obstacle) =>
+                    obstacle.affected_path_ids.includes(selectedPath.id),
+                  )
+                  .map((obstacle) => (
+                    <div className="active-obstacle" key={obstacle.id}>
+                      <div>
+                        <strong>{obstacle.reason}</strong>
+                        <span>
+                          {obstacle.expires_at
+                            ? `Expires ${new Date(obstacle.expires_at).toLocaleString()}`
+                            : "No expiry"}
+                        </span>
+                      </div>
+                      <button
+                        disabled={saving}
+                        onClick={() => void deactivateObstacle(obstacle.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+              </section>
               {selectedPath.alertIds?.length ? (
                 <p className="muted">
                   Linked alerts: {selectedPath.alertIds.join(", ")}

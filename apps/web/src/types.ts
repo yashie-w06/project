@@ -54,12 +54,26 @@ export type NoRouteCode =
   | "DEST_UNREACHABLE"
   | "NO_PLAUSIBLE_APPROACH"
   | "DIFFERENT_COMPONENTS"
-  | "BLOCKED_OR_INELIGIBLE";
+  | "BLOCKED_OR_INELIGIBLE"
+  | "NO_SUITABLE_WHEELCHAIR_ROUTE";
 export interface RouteSegment {
   geometry: LineString;
   pathId: string;
   kind: "main" | "shortcut";
   note: string | null;
+  source?: "editor" | "osm" | "query";
+  sourceId?: string;
+  accessibility?: {
+    surface: string | null;
+    surfaceCondition: string;
+    stairs: string;
+    slopePercent: number | null;
+    widthMeters: number | null;
+    wheelchairAccess: string;
+    confidence: string;
+  };
+  unknown?: string[];
+  constraints?: string[];
 }
 export interface RouteApproach {
   role: "start" | "destination";
@@ -80,6 +94,7 @@ export type RouteResponse =
         snapped: Coordinate;
         distanceMetres?: number;
       }>;
+      networkRevision?: string;
     }
   | {
       status: "no_route";
@@ -87,4 +102,10 @@ export type RouteResponse =
       message: string;
       notices: string[];
       reason?: string;
+      networkRevision?: string;
+    }
+  | {
+      status: "route_changed";
+      message: string;
+      networkRevision: string;
     };

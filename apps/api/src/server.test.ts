@@ -19,7 +19,7 @@ const config: Config = {
 const db = {
   query: async (sql: string) => ({
     rowCount: sql === "SELECT 1" ? 1 : 0,
-    rows: [],
+    rows: sql.includes("to_regclass") ? [{ ready: true }] : [],
   }),
   connect: async () => {
     throw new Error("not expected");
@@ -34,6 +34,23 @@ test("health distinguishes a ready database without exposing configuration", asy
   assert.deepEqual(response.body, { process: "ok", database: "ready" });
   assert.equal(JSON.stringify(response.body).includes("postgresql"), false);
 });
+test("health reports an unmigrated obstacle schema as unavailable", async () => {
+  const unmigratedDb = {
+    query: async (sql: string) => ({
+      rowCount: 1,
+      rows: sql === "SELECT 1" ? [] : [{ ready: false }],
+    }),
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const response = await request(createApp(config, unmigratedDb)).get(
+    "/api/health",
+  );
+  assert.equal(response.status, 503);
+  assert.deepEqual(response.body, { process: "ok", database: "unavailable" });
+});
 test("editor writes reject an anonymous request", async () => {
   const response = await request(app)
     .put("/api/editor/nodes/example")
@@ -45,6 +62,202 @@ test("public message validation rejects out-of-campus coordinates before persist
     .post("/api/messages")
     .send({ coordinates: [0, 0], description: "test" });
   assert.equal(response.status, 400);
+});
+
+test("public map data loads a valid feature collection and effective network state", async () => {
+  const response = await request(app).get("/api/map");
+  assert.equal(response.status, 200);
+  assert.equal(response.body.buildings.type, "FeatureCollection");
+  assert.equal(response.body.paths.type, "FeatureCollection");
+  assert.deepEqual(response.body.paths.features, []);
+  assert.equal(typeof response.body.revision, "string");
+});
+
+test("duplicate editor node rows do not turn a connected OSM route into no-route", async () => {
+  const way = {
+    id: "candidate-42",
+    source_way_id: "42",
+    source_node_ids: ["n1", "n2"],
+    coordinates: [
+      [75.871, 22.726],
+      [75.872, 22.726],
+    ],
+    tags: { highway: "footway" },
+    reviewer_decision: null,
+    blocked: false,
+    version: 1,
+  };
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.includes("FROM route_nodes"))
+        return {
+          rowCount: 1,
+          rows: [{ id: "unrelated-node", longitude: 75.87, latitude: 22.725 }],
+        };
+      if (sql.includes("FROM osm_candidates"))
+        return { rowCount: 1, rows: [way] };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "outdoor", coordinates: [75.871, 22.726] },
+      destination: { kind: "outdoor", coordinates: [75.872, 22.726] },
+    });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "ok");
+  assert.deepEqual(
+    response.body.segments.map((segment: { pathId: string }) => segment.pathId),
+    ["osm-42"],
+  );
+  assert.equal(response.body.geometry.type, "LineString");
+  assert.ok(response.body.geometry.coordinates.length >= 2);
+});
+
+test("active temporary obstacle removes its OSM path from route snapping", async () => {
+  const way = {
+    id: "candidate-42",
+    source_way_id: "42",
+    source_node_ids: ["n1", "n2"],
+    coordinates: [
+      [75.871, 22.726],
+      [75.872, 22.726],
+    ],
+    tags: { highway: "footway" },
+    reviewer_decision: null,
+    blocked: false,
+    version: 1,
+  };
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.includes("FROM osm_candidates"))
+        return { rowCount: 1, rows: [way] };
+      if (sql.includes("FROM route_obstacles"))
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: "obstacle-1",
+              reason: "Maintenance",
+              affected_path_ids: ["osm-42"],
+              created_at: "2026-09-27T00:00:00.000Z",
+              expires_at: "2026-09-27T01:00:00.000Z",
+            },
+          ],
+        };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "outdoor", coordinates: [75.871, 22.726] },
+      destination: { kind: "outdoor", coordinates: [75.872, 22.726] },
+    });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.status, "no_route");
+  assert.equal(response.body.code, "BLOCKED_OR_INELIGIBLE");
+});
+
+test("route base graph is reused for the same effective network revision", async () => {
+  let graphCandidateReads = 0;
+  const way = {
+    id: "candidate-42",
+    source_way_id: "42",
+    source_node_ids: ["n1", "n2"],
+    coordinates: [
+      [75.871, 22.726],
+      [75.872, 22.726],
+    ],
+    tags: { highway: "footway" },
+    reviewer_decision: null,
+    blocked: false,
+    version: 1,
+  };
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.startsWith("SELECT id,source_way_id,source_node_ids")) {
+        graphCandidateReads += 1;
+        return { rowCount: 1, rows: [way] };
+      }
+      if (sql.includes("FROM osm_candidates"))
+        return {
+          rowCount: 1,
+          rows: [{ source_way_id: "42", version: 1, blocked: false }],
+        };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const routeApp = createApp(config, fixtureDb);
+  const first = await request(routeApp)
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "outdoor", coordinates: [75.871, 22.726] },
+      destination: { kind: "outdoor", coordinates: [75.872, 22.726] },
+    });
+  const second = await request(routeApp)
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "outdoor", coordinates: [75.871, 22.726] },
+      destination: { kind: "outdoor", coordinates: [75.872, 22.726] },
+    });
+  assert.equal(first.body.status, "ok");
+  assert.equal(second.body.status, "ok");
+  assert.equal(graphCandidateReads, 1);
+});
+
+test("graph validation errors are server failures, never disconnected-route results", async () => {
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.includes("FROM route_nodes"))
+        return {
+          rowCount: 2,
+          rows: [
+            {
+              id: "conflicting-node",
+              longitude: 75.871,
+              latitude: 22.726,
+            },
+            {
+              id: "conflicting-node",
+              longitude: 75.872,
+              latitude: 22.726,
+            },
+          ],
+        };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/route")
+    .send({
+      profile: "healthy",
+      start: { kind: "outdoor", coordinates: [75.871, 22.726] },
+      destination: { kind: "outdoor", coordinates: [75.872, 22.726] },
+    });
+  assert.equal(response.status, 500);
+  assert.notEqual(response.body.status, "no_route");
 });
 test("bad editor credentials receive 401", async () => {
   const response = await request(app)
@@ -200,4 +413,70 @@ test("shortcut creation validates both snaps and persists durable parent connect
         sql.includes("INSERT INTO path_snap_connections"),
       ),
   );
+});
+
+test("editor publishes an expiring obstacle only for an existing stable path id", async () => {
+  const calls: Array<{ sql: string; values?: unknown[] }> = [];
+  const fixtureDb = {
+    query: async (sql: string, values?: unknown[]) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM osm_candidates"))
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: "candidate-42",
+              source_way_id: "42",
+              source_node_ids: ["n1", "n2"],
+              coordinates: [
+                [75.871, 22.726],
+                [75.872, 22.726],
+              ],
+              tags: { highway: "footway" },
+              reviewer_decision: null,
+              blocked: false,
+              note: null,
+              version: 1,
+            },
+          ],
+        };
+      if (sql.includes("INSERT INTO route_obstacles"))
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              id: "temporary-1",
+              reason: "Path maintenance",
+              affected_path_ids: values?.[2],
+              expires_at: "2026-09-27T02:00:00.000Z",
+            },
+          ],
+        };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => {
+      throw new Error("not expected");
+    },
+    end: async () => undefined,
+  } as unknown as Database;
+  const token = await createEditorToken(config);
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/editor/obstacles")
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      reason: "Path maintenance",
+      affectedPathIds: ["osm-42"],
+      expiresInMinutes: 120,
+    });
+  assert.equal(response.status, 201);
+  assert.deepEqual(response.body.affected_path_ids, ["osm-42"]);
+  const insert = calls.find((call) =>
+    call.sql.includes("INSERT INTO route_obstacles"),
+  );
+  assert.ok(insert);
+  assert.deepEqual(insert.values?.slice(1, 4), [
+    "Path maintenance",
+    ["osm-42"],
+    120,
+  ]);
 });

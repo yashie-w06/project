@@ -88,6 +88,8 @@ const noRouteMessages: Record<string, string> = {
   DIFFERENT_COMPONENTS:
     "The mapped walking paths do not connect these locations yet.",
   BLOCKED_OR_INELIGIBLE: "No available route for this profile right now.",
+  NO_SUITABLE_WHEELCHAIR_ROUTE:
+    "No suitable wheelchair route was found with current map data. Another path may need mapping or accessibility checks.",
 };
 const maximumNoteLength = 500;
 
@@ -99,6 +101,7 @@ export function routePresentation(response: unknown) {
       source?: string;
       sourceId?: string;
       pathId?: string;
+      kind?: "main" | "shortcut";
       note?: string | null;
     }>;
     approaches?: Array<{ boundary?: Coordinate; role?: string }>;
@@ -109,6 +112,7 @@ export function routePresentation(response: unknown) {
       source?: string;
       sourceId?: string;
       pathId?: string;
+      kind?: "main" | "shortcut";
       note?: string | null;
     }
   > = {
@@ -127,6 +131,7 @@ export function routePresentation(response: unknown) {
                 source: segment.source,
                 sourceId: segment.sourceId,
                 pathId: segment.pathId,
+                kind: segment.kind,
                 note: segment.note,
               },
               geometry,
@@ -198,7 +203,8 @@ export function PublicMap() {
   const [sending, setSending] = useState(false);
   const [messageSent, setMessageSent] = useState(false);
   const routeRequestId = useRef(0);
-  const recomputeRouteRef = useRef<() => void>(() => undefined);
+  const routeRevision = useRef<string | undefined>(undefined);
+  const recomputeRouteRef = useRef<(replan?: boolean) => void>(() => undefined);
 
   async function loadBuildingFloors(buildingId: string) {
     const apiBase = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -329,7 +335,7 @@ export function PublicMap() {
           setRoutePathIds([]);
           setRouteOutdated(true);
           setRouteMessages([]);
-          if (start && destination) recomputeRouteRef.current();
+          if (start && destination) recomputeRouteRef.current(true);
         }
       }
     } catch (cause) {
@@ -353,6 +359,55 @@ export function PublicMap() {
       window.clearInterval(timer);
     };
   }, [refreshMap]);
+
+  useEffect(() => {
+    if (!route || !routePathIds.length) return;
+    let active = true;
+    let checking = false;
+    let observedRevision = routeRevision.current;
+    const checkNetwork = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const current = await api.networkState();
+        if (!active) return;
+        if (observedRevision === undefined) {
+          observedRevision = current.revision;
+          return;
+        }
+        if (current.revision === observedRevision) return;
+        observedRevision = current.revision;
+        const blocked = new Set(current.blockedPathIds);
+        if (routePathIds.some((id) => blocked.has(id))) {
+          routeRequestId.current += 1;
+          setRoute(undefined);
+          setRouteSegments(undefined);
+          setApproachPoints(undefined);
+          setRoutePathIds([]);
+          setRouteOutdated(false);
+          setRouteMessages(["Route changed; finding another way."]);
+          recomputeRouteRef.current(true);
+        }
+      } catch {
+        // Network polling is advisory; an unavailable check leaves the current
+        // route visible until the next poll or an explicit recalculation.
+      } finally {
+        checking = false;
+      }
+    };
+    const onFocus = () => {
+      if (document.visibilityState === "visible") void checkNetwork();
+    };
+    const timer = window.setInterval(checkNetwork, 12_000);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [route, routePathIds]);
 
   useEffect(() => {
     let active = true;
@@ -555,12 +610,12 @@ export function PublicMap() {
     );
   }
 
-  async function findRoute() {
+  async function findRoute(replan = false) {
     if (!start || !destination) return;
     const requestId = ++routeRequestId.current;
     setRouteLoading(true);
     setRequestError("");
-    setRouteMessages([]);
+    setRouteMessages(replan ? ["Route changed; finding another way."] : []);
     setRoute(undefined);
     setRouteSegments(undefined);
     setApproachPoints(undefined);
@@ -573,6 +628,7 @@ export function PublicMap() {
       );
       if (requestId !== routeRequestId.current) return;
       if (response.status === "ok") {
+        routeRevision.current = response.networkRevision;
         const presentation = routePresentation(response);
         setRoute({
           type: "Feature",
@@ -586,12 +642,24 @@ export function PublicMap() {
           return id ? [id] : [];
         });
         setRoutePathIds([...new Set(sourceIds)]);
-        setRouteMessages(
-          (response as Extract<RouteResponse, { status: "ok" }>).notices ?? [],
-        );
-      } else {
+        setRouteMessages([
+          ...(replan ? ["Route changed; finding another way."] : []),
+          ...(response as Extract<RouteResponse, { status: "ok" }>).notices,
+        ]);
+      } else if (response.status === "no_route") {
+        routeRevision.current = response.networkRevision;
         setRoutePathIds([]);
-        setRouteMessages([noRouteMessages[response.code] ?? response.message]);
+        setRouteMessages([
+          ...(replan ? ["Route changed; finding another way."] : []),
+          noRouteMessages[response.code] ?? response.message,
+        ]);
+      } else {
+        routeRevision.current = response.networkRevision;
+        setRoutePathIds([]);
+        setRouteMessages(["Route changed; finding another way."]);
+        window.setTimeout(() => {
+          if (requestId === routeRequestId.current) void findRoute(true);
+        }, 0);
       }
     } catch (cause) {
       if (requestId === routeRequestId.current)
@@ -604,8 +672,8 @@ export function PublicMap() {
       if (requestId === routeRequestId.current) setRouteLoading(false);
     }
   }
-  recomputeRouteRef.current = () => {
-    void findRoute();
+  recomputeRouteRef.current = (replan) => {
+    void findRoute(replan);
   };
 
   async function sendNote() {

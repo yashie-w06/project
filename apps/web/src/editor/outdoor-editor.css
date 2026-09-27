@@ -81,6 +81,36 @@
   border-radius: 6px;
   background: #f4f7f5;
 }
+.path-obstacle {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid #d5ddd7;
+  border-radius: 8px;
+  background: #f8faf8;
+}
+.path-obstacle h4,
+.path-obstacle p {
+  margin: 0;
+}
+.active-obstacle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff2ed;
+}
+.active-obstacle > div {
+  display: grid;
+  gap: 4px;
+}
+.active-obstacle span {
+  color: #5f6c64;
+  font-size: 12px;
+}
 .button-row {
   display: flex;
   flex-wrap: wrap;

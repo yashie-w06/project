@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { LonLat } from "../osm/types.js";
 import { findRoute } from "./astar.js";
+import { evaluateEdge } from "./policy.js";
 import {
   snapToEdge,
   snapToVerifiedEdges,
@@ -409,5 +410,116 @@ test("local projection round trips and reports campus-scale distance", () => {
   assert.ok(
     distanceMetres(nodes[0]!.coordinates, nodes[1]!.coordinates, projection) >
       100,
+  );
+});
+
+test("profile policies prefer known accessible alternatives and penalize stairs for luggage", () => {
+  const policyNodes: RouteNode[] = [
+    { id: "s", coordinates: coordinate(0) },
+    { id: "a", coordinates: coordinate(0.001, 0.003) },
+    { id: "t", coordinates: coordinate(0.002) },
+  ];
+  const knownAccessible = {
+    surface: "asphalt",
+    surfaceCondition: "good" as const,
+    stairs: "no" as const,
+    slopePercent: 1,
+    widthMeters: 1.2,
+    wheelchairAccess: "yes" as const,
+    confidence: "editor_observation" as const,
+  };
+  const profileEdges: RouteEdge[] = [
+    {
+      id: "short-stairs",
+      fromNodeId: "s",
+      toNodeId: "t",
+      coordinates: [policyNodes[0]!.coordinates, policyNodes[2]!.coordinates],
+      kind: "main",
+      verified: true,
+      stairs: "yes",
+      surface: "gravel",
+      surfaceCondition: "bad",
+      slopePercent: 8,
+      widthMeters: 0.7,
+      wheelchairEligible: false,
+    },
+    {
+      id: "smooth-a",
+      fromNodeId: "s",
+      toNodeId: "a",
+      coordinates: [policyNodes[0]!.coordinates, policyNodes[1]!.coordinates],
+      kind: "main",
+      verified: true,
+      ...knownAccessible,
+    },
+    {
+      id: "smooth-b",
+      fromNodeId: "a",
+      toNodeId: "t",
+      coordinates: [policyNodes[1]!.coordinates, policyNodes[2]!.coordinates],
+      kind: "main",
+      verified: true,
+      ...knownAccessible,
+    },
+  ];
+  const find = (profile: TravelProfile, edges = profileEdges) =>
+    findRoute(
+      buildRoutingGraph({ nodes: policyNodes, edges, profile }),
+      "s",
+      "t",
+    );
+  assert.deepEqual(find("healthy")?.edgeIds, ["short-stairs"]);
+  assert.deepEqual(find("wheelchair")?.edgeIds, ["smooth-a", "smooth-b"]);
+  assert.deepEqual(find("heavy_luggage")?.edgeIds, ["smooth-a", "smooth-b"]);
+});
+
+test("wheelchair uses unknown attributes only in its conditional second pass", () => {
+  const unknownEdge: RouteEdge = {
+    ...edges[2]!,
+    id: "unknown-main",
+    kind: "main",
+    wheelchairEligible: true,
+  };
+  const strict = buildRoutingGraph({
+    nodes,
+    edges: [unknownEdge],
+    profile: "wheelchair",
+    allowUnknownWheelchair: false,
+  });
+  assert.equal(findRoute(strict, "a", "c"), null);
+  const conditional = buildRoutingGraph({
+    nodes,
+    edges: [unknownEdge],
+    profile: "wheelchair",
+    allowUnknownWheelchair: true,
+  });
+  assert.deepEqual(findRoute(conditional, "a", "c")?.segments[0]?.unknown, [
+    "width",
+    "slope",
+    "surface material",
+    "surface condition",
+  ]);
+  const incompatible = {
+    ...unknownEdge,
+    id: "incompatible",
+    wheelchairAccess: "no" as const,
+  };
+  assert.equal(
+    findRoute(
+      buildRoutingGraph({
+        nodes,
+        edges: [incompatible],
+        profile: "wheelchair",
+        allowUnknownWheelchair: true,
+      }),
+      "a",
+      "c",
+    ),
+    null,
+  );
+  assert.deepEqual(
+    evaluateEdge({ ...unknownEdge, widthMeters: 0.8 }, "wheelchair")
+      .constraints,
+    ["narrow width"],
   );
 });
