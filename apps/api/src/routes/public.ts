@@ -9,6 +9,7 @@ import type {
   Polygon,
 } from "geojson";
 import type { Database } from "../db.js";
+import { loadEffectiveNetworkState } from "../obstacles.js";
 import { loadStoredPathFeatures, pathAsFeature } from "../paths.js";
 import {
   messageSchema,
@@ -99,6 +100,7 @@ export function publicRoutes(
           coordinates: [row.longitude, row.latitude],
           description: row.description,
         })),
+        ...(await loadEffectiveNetworkState(db)),
       });
     } catch (error) {
       next(error);
@@ -205,6 +207,14 @@ export function publicRoutes(
       });
     try {
       response.json(await resolveRoute(parsed.data));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/network-state", async (_request, response, next) => {
+    try {
+      response.json(await loadEffectiveNetworkState(db));
     } catch (error) {
       next(error);
     }

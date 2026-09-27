@@ -10,6 +10,7 @@ import type {
   RouteNode,
   TravelProfile,
 } from "./types.js";
+import { evaluateEdge } from "./policy.js";
 
 export interface GraphArc {
   readonly edgeId: string;
@@ -23,6 +24,17 @@ export interface GraphArc {
   readonly status: "confirmed" | "provisional";
   readonly source: "editor" | "osm" | "query";
   readonly sourceOsmId: string | null;
+  readonly unknown: readonly string[];
+  readonly constraints: readonly string[];
+  readonly accessibility: {
+    surface: string | null;
+    surfaceCondition: string;
+    stairs: string;
+    slopePercent: number | null;
+    widthMeters: number | null;
+    wheelchairAccess: string;
+    confidence: string;
+  };
 }
 
 export interface RoutingGraph {
@@ -54,8 +66,7 @@ export function edgeEligibleForProfile(
   edge: RouteEdge,
   profile: TravelProfile,
 ): boolean {
-  if (profile !== "wheelchair") return true;
-  return edge.kind === "main" && edge.wheelchairEligible !== false;
+  return evaluateEdge(edge, profile).eligible;
 }
 
 export function edgeIsRoutable(_edge: RouteEdge): boolean {
@@ -88,6 +99,7 @@ export function buildRoutingGraph(input: {
   readonly activeBlocks?: readonly ActiveBlock[];
   readonly endpointToleranceMetres?: number;
   readonly provisionalPenaltyMetres?: number;
+  readonly allowUnknownWheelchair?: boolean;
 }): RoutingGraph {
   const nodes = new Map<string, RouteNode>();
   for (const node of input.nodes) {
@@ -125,6 +137,8 @@ export function buildRoutingGraph(input: {
       !edgeEligibleForProfile(edge, input.profile)
     )
       continue;
+    const policy = evaluateEdge(edge, input.profile, input.allowUnknownWheelchair ?? true);
+    if (!policy.eligible) continue;
     const from = nodes.get(edge.fromNodeId);
     const to = nodes.get(edge.toNodeId);
     if (!from || !to)
@@ -156,8 +170,7 @@ export function buildRoutingGraph(input: {
     const coordinates = normalizedCoordinates(edge, from, to);
     const length = polylineLengthMetres(coordinates, projection);
     const status = edge.status === "provisional" ? "provisional" : "confirmed";
-    const cost =
-      length +
+    const cost = policy.cost +
       (status === "provisional" ? (input.provisionalPenaltyMetres ?? 2) : 0);
     if (!(cost > 0))
       throw new InvalidGraphError(`Edge ${edge.id} has zero length`);
@@ -175,6 +188,9 @@ export function buildRoutingGraph(input: {
         status,
         source: edge.source ?? (status === "provisional" ? "osm" : "editor"),
         sourceOsmId: edge.sourceOsmId ?? null,
+        unknown: policy.unknown,
+        constraints: policy.constraints,
+        accessibility: accessibilitySummary(edge),
       }),
     );
     if (!edge.oneWay) {
@@ -191,6 +207,9 @@ export function buildRoutingGraph(input: {
           status,
           source: edge.source ?? (status === "provisional" ? "osm" : "editor"),
           sourceOsmId: edge.sourceOsmId ?? null,
+          unknown: policy.unknown,
+          constraints: policy.constraints,
+          accessibility: accessibilitySummary(edge),
         }),
       );
     }
@@ -198,6 +217,18 @@ export function buildRoutingGraph(input: {
   for (const arcs of adjacency.values())
     arcs.sort((a, b) => a.edgeId.localeCompare(b.edgeId));
   return Object.freeze({ nodes, edges, adjacency });
+}
+
+function accessibilitySummary(edge: RouteEdge) {
+  return Object.freeze({
+    surface: edge.surface ?? null,
+    surfaceCondition: edge.surfaceCondition ?? "unknown",
+    stairs: edge.stairs ?? "unknown",
+    slopePercent: edge.slopePercent ?? null,
+    widthMeters: edge.widthMeters ?? null,
+    wheelchairAccess: edge.wheelchairAccess ?? "unknown",
+    confidence: edge.confidence ?? "unknown",
+  });
 }
 
 export interface GraphComponents {

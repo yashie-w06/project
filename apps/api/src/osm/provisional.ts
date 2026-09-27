@@ -6,6 +6,7 @@ import type {
   OsmPathCandidate,
   OsmTags,
 } from "./types.js";
+import { normalizeSurfaceCondition, parseInclinePercent } from "../routing/policy.js";
 
 export type OsmExclusionReason =
   | "review_rejected"
@@ -340,6 +341,13 @@ export function buildProvisionalOsmGraph(input: {
           sourceOsmId: candidate.sourceWayId,
           osmHighway: candidate.tags.highway ?? null,
           wheelchairEligible,
+          surface: candidate.tags.surface ?? null,
+          surfaceCondition: normalizeSurfaceCondition(candidate.tags.smoothness),
+          stairs: candidate.tags.highway === "steps" || candidate.tags.steps === "yes" ? "yes" : candidate.tags.steps === "no" ? "no" : "unknown",
+          slopePercent: parseInclinePercent(candidate.tags.incline),
+          widthMeters: parseWidth(candidate.tags.width),
+          wheelchairAccess: candidate.tags.wheelchair === "yes" ? "yes" : candidate.tags.wheelchair === "no" ? "no" : "unknown",
+          confidence: "osm_tag",
           blocked: candidate.blocked ?? false,
           note: candidate.note ?? null,
           version: candidate.version,
@@ -355,4 +363,13 @@ export function buildProvisionalOsmGraph(input: {
     edges: Object.freeze(edges),
     excluded: Object.freeze(excluded),
   });
+}
+
+function parseWidth(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(m|cm)?\s*$/i.exec(value);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const metres = match[2]?.toLowerCase() === "cm" ? amount / 100 : amount;
+  return Number.isFinite(metres) && metres > 0 && metres <= 20 ? metres : null;
 }

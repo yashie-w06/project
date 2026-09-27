@@ -19,6 +19,9 @@ export interface RouteSegment {
   readonly status: "confirmed" | "provisional";
   readonly source: "editor" | "osm" | "query";
   readonly sourceOsmId: string | null;
+  readonly unknown: readonly string[];
+  readonly constraints: readonly string[];
+  readonly accessibility: GraphArc["accessibility"];
   readonly geometry: Readonly<LineString>;
 }
 
@@ -80,6 +83,9 @@ function reconstruct(
           status: arc.status,
           source: arc.source,
           sourceOsmId: arc.sourceOsmId,
+          unknown: arc.unknown,
+          constraints: arc.constraints,
+          accessibility: arc.accessibility,
           geometry: Object.freeze({
             type: "LineString" as const,
             coordinates: arc.coordinates.map(([longitude, latitude]) => [

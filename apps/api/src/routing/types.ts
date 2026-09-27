@@ -4,6 +4,9 @@ export type TravelProfile = "healthy" | "wheelchair" | "heavy_luggage";
 export type RouteEdgeKind = "main" | "shortcut";
 export type RouteEdgeStatus = "confirmed" | "provisional" | "draft";
 export type RouteEdgeSource = "editor" | "osm" | "query";
+export type AccessValue = "yes" | "no" | "unknown";
+export type RouteConfidence = "osm_tag" | "editor_observation" | "condition_report" | "unknown";
+export type SurfaceCondition = "excellent" | "good" | "intermediate" | "bad" | "very_bad" | "horrible" | "unknown";
 
 export interface RouteNode {
   readonly id: string;
@@ -30,6 +33,15 @@ export interface RouteEdge {
   readonly name?: string | null;
   readonly note?: string | null;
   readonly version?: number;
+  readonly lengthMeters?: number;
+  readonly surface?: string | null;
+  readonly surfaceCondition?: SurfaceCondition;
+  readonly stairs?: AccessValue;
+  readonly slopePercent?: number | null;
+  readonly widthMeters?: number | null;
+  readonly wheelchairAccess?: AccessValue;
+  readonly confidence?: RouteConfidence;
+  readonly observedAt?: string | null;
 }
 
 export interface ActiveBlock {

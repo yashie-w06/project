@@ -167,27 +167,18 @@ export function splitEdgeAtSnap(
   const secondCoordinates = Object.freeze(
     sameCoordinate(secondBase[0], split) ? secondBase : [split, ...secondBase],
   );
-  const common = {
-    kind: edge.kind,
-    verified: edge.verified,
-    blocked: edge.blocked,
-    oneWay: edge.oneWay,
-    sourceOsmId: edge.sourceOsmId,
-    status: edge.status,
-    source: edge.source,
-    osmHighway: edge.osmHighway,
-    wheelchairEligible: edge.wheelchairEligible,
-  } as const;
   const firstEdge: RouteEdge = Object.freeze({
-    ...common,
+    ...edge,
     id: firstEdgeId,
+    parentFeatureId: edge.parentFeatureId ?? edge.id,
     fromNodeId: edge.fromNodeId,
     toNodeId: newNodeId,
     coordinates: firstCoordinates,
   });
   const secondEdge: RouteEdge = Object.freeze({
-    ...common,
+    ...edge,
     id: secondEdgeId,
+    parentFeatureId: edge.parentFeatureId ?? edge.id,
     fromNodeId: newNodeId,
     toNodeId: edge.toNodeId,
     coordinates: secondCoordinates,
