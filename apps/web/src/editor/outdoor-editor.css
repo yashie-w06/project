@@ -9,20 +9,16 @@
   gap: 6px;
 }
 .outdoor-toolbar button {
+  min-height: 40px;
   border: 1px solid #b8c5bd;
   border-radius: 7px;
   background: white;
-  padding: 8px 11px;
+  padding: 8px 12px;
 }
 .outdoor-toolbar .active {
   background: #163f34;
   border-color: #163f34;
   color: white;
-}
-.tool-help {
-  margin: 0;
-  color: #52645b;
-  font-size: 13px;
 }
 .outdoor-layout {
   display: grid;
@@ -53,76 +49,51 @@
 .outdoor-inspector h3 {
   margin: 5px 0 10px;
 }
+.outdoor-inspector .field small {
+  float: right;
+  color: #68766e;
+  font-size: 11px;
+  font-weight: 500;
+}
+.outdoor-inspector textarea {
+  min-height: 82px;
+  resize: vertical;
+}
 .editor-status {
   padding: 9px;
   border-left: 3px solid #176b51;
   background: #edf7f2;
   font-size: 13px;
 }
-.readiness {
-  margin-bottom: 12px;
-}
-.readiness dl {
+.path-state-choices {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 5px;
-  margin: 0;
-}
-.readiness dl div {
-  padding: 7px;
-  border-radius: 7px;
-  background: #f1f5f2;
-}
-.readiness dt {
-  color: #66756d;
-  font-size: 11px;
-}
-.readiness dd {
-  margin: 2px 0 0;
-  font-size: 20px;
-  font-weight: 750;
-}
-.readiness p {
-  color: #805514;
-  font-size: 12px;
-}
-.check {
-  display: flex;
-  align-items: flex-start;
   gap: 7px;
-  margin: 10px 0;
-  font-size: 13px;
-}
-.caution {
-  padding: 8px;
-  border-radius: 7px;
-  background: #fff6df;
-}
-.publish-button {
-  width: 100%;
+  margin: 12px 0;
   padding: 10px;
-  border: 1px solid #9b5a19;
-  border-radius: 7px;
-  background: #fff;
-  color: #713b08;
-  font-weight: 700;
+  border: 1px solid #d5ddd7;
+  border-radius: 8px;
 }
-.publish-button:disabled {
-  opacity: 0.45;
+.path-state-choices label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #f4f7f5;
 }
-.candidate-filters {
-  display: grid;
-  grid-template-columns: 1fr 130px;
-  gap: 5px;
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 8px 0;
 }
-.candidate-filters input,
-.candidate-filters select,
-.outdoor-inspector select {
-  min-width: 0;
-  padding: 8px;
+.button-row button,
+.saved-alert button {
+  min-height: 36px;
   border: 1px solid #bdc9c1;
   border-radius: 7px;
   background: white;
+  padding: 7px 10px;
 }
 .compact-candidates {
   display: grid;
@@ -130,51 +101,33 @@
   overflow: auto;
   margin: 8px 0;
 }
-.compact-candidates button {
-  display: grid;
-  gap: 2px;
-  padding: 8px;
-  border: 0;
+.saved-alert {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
   border-bottom: 1px solid #e0e5e1;
-  background: white;
+}
+.saved-alert > button:first-child {
+  flex: 1;
+  border-color: transparent;
   text-align: left;
 }
-.compact-candidates button.selected {
-  background: #edf3ff;
-  box-shadow: inset 3px 0 #315aa9;
+.saved-alert.selected > button:first-child {
+  background: #fff5dd;
 }
-.compact-candidates span {
-  color: #68766e;
-  font-size: 11px;
-}
-.candidate-card {
-  padding: 10px;
-  border: 1px solid #cfd9d2;
-  border-radius: 8px;
-}
-.candidate-card h4,
-.candidate-card p {
-  margin: 3px 0 8px;
-}
-.decision-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.decision-buttons button {
-  padding: 6px;
-  font-size: 11px;
-}
-.edge-checks {
-  display: grid;
-  gap: 5px;
-  max-height: 140px;
-  overflow: auto;
-  font-size: 12px;
-}
-.outdoor-inspector fieldset {
-  border: 1px solid #d5ddd7;
+.alert-detail {
+  padding: 9px;
   border-radius: 7px;
+  background: #f2f5f3;
+}
+.selection-warning {
+  color: #9a4c15;
+  font-size: 13px;
+}
+.danger {
+  border-color: #bd6a5f;
+  color: #8c261f;
 }
 @media (max-width: 900px) {
   .outdoor-layout {

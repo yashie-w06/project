@@ -1,0 +1,42 @@
+.floor-viewer__heading {
+  margin: 0 0 0.6rem;
+  color: #0f172a;
+  font-size: 1rem;
+}
+
+.floor-viewer__state {
+  display: flex;
+  min-height: 12rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  color: #334155;
+  padding: 1rem;
+  text-align: center;
+}
+
+.floor-viewer__state p {
+  margin: 0;
+}
+
+.floor-viewer__state button {
+  border: 1px solid #94a3b8;
+  border-radius: 0.4rem;
+  background: white;
+  color: #0f172a;
+  cursor: pointer;
+  padding: 0.45rem 0.8rem;
+}
+
+.floor-viewer__state--error {
+  color: #991b1b;
+}
+
+.floor-viewer__hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+}

@@ -11,14 +11,10 @@ export const campusCoordinateSchema = coordinateSchema.refine(
 );
 export const profileSchema = z.enum(["healthy", "wheelchair", "heavy_luggage"]);
 export const endpointSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("outdoor"), coordinates: coordinateSchema }),
+  z.object({ kind: z.literal("outdoor"), coordinates: campusCoordinateSchema }),
   z.object({
     kind: z.literal("building"),
     buildingId: z.string().min(1),
-    floor: z.number().int(),
-    exitDoorId: z.string().min(1).optional(),
-    entranceDoorId: z.string().min(1).optional(),
-    roomId: z.string().min(1).optional(),
     approachCoordinates: coordinateSchema.optional(),
   }),
 ]);
@@ -29,13 +25,14 @@ export const routeRequestSchema = z.object({
 });
 export const messageSchema = z.object({
   coordinates: campusCoordinateSchema,
-  description: z.string().trim().min(1).max(1000),
+  description: z.string().trim().min(1).max(500),
 });
 export const pointSchema = z.object({
   id: z.string().min(1).max(100),
-  name: z.string().trim().min(1).max(120),
+  name: z.string().trim().min(1).max(120).default("Outdoor point"),
   coordinates: campusCoordinateSchema,
-  published: z.boolean().default(false),
+  description: z.string().trim().max(500).default(""),
+  note: z.string().trim().max(500).optional(),
   version: z.number().int().positive().default(1),
 });
 

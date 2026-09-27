@@ -65,26 +65,55 @@ function route(
   );
 }
 
-test("A* uses verified bidirectional main and profile-compatible shortcut edges", () => {
-  assert.deepEqual(route("healthy")?.edgeIds, ["main-ab", "shortcut-bc"]);
-  assert.deepEqual(route("heavy_luggage")?.edgeIds, ["main-ab", "shortcut-bc"]);
-  assert.equal(route("wheelchair"), null);
+test("legacy verification flags do not gate paths; wheelchair still excludes shortcuts", () => {
+  assert.deepEqual(route("healthy")?.edgeIds, ["unverified-ac"]);
+  assert.deepEqual(route("heavy_luggage")?.edgeIds, ["unverified-ac"]);
+  assert.deepEqual(route("wheelchair")?.edgeIds, ["unverified-ac"]);
+  assert.ok(
+    findRoute(
+      buildRoutingGraph({
+        nodes,
+        edges: edges.slice(0, 2),
+        profile: "healthy",
+      }),
+      "a",
+      "c",
+    ),
+  );
+  assert.equal(
+    findRoute(
+      buildRoutingGraph({
+        nodes,
+        edges: edges.slice(0, 2),
+        profile: "wheelchair",
+      }),
+      "a",
+      "c",
+    ),
+    null,
+  );
 
   const reverse = findRoute(
     buildRoutingGraph({ nodes, edges, profile: "healthy" }),
     "c",
     "a",
   );
-  assert.deepEqual(reverse?.edgeIds, ["shortcut-bc", "main-ab"]);
+  assert.deepEqual(reverse?.edgeIds, ["unverified-ac"]);
   assert.deepEqual(reverse?.geometry.coordinates[0], nodes[2]!.coordinates);
 });
 
-test("effective active blocks exclude an edge for every profile and unblocking restores it", () => {
-  const active = [{ active: true, edgeIds: ["main-ab"] }] as const;
+test("explicit path blocks exclude an edge for every profile and clearing restores it", () => {
+  const active = [
+    { active: true, edgeIds: ["unverified-ac", "main-ab", "shortcut-bc"] },
+  ] as const;
   for (const profile of ["healthy", "wheelchair", "heavy_luggage"] as const) {
     assert.equal(route(profile, active), null);
   }
-  assert.ok(route("healthy", [{ active: false, edgeIds: ["main-ab"] }]));
+  assert.ok(
+    route("healthy", [
+      { active: false, edgeIds: ["unverified-ac", "main-ab", "shortcut-bc"] },
+    ]),
+  );
 });
 
 test("graph rejects dangling endpoints and geometry that merely crosses or approaches a node", () => {
@@ -140,12 +169,15 @@ test("bounded segment snapping uses metres and topology-preserving split geometr
   ]);
 });
 
-test("multi-edge snapping ignores unverified graph material", () => {
+test("multi-edge snapping accepts stored graph paths regardless of legacy verification", () => {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const point = coordinate(0.0015, 0.00001);
   const snapped = snapToVerifiedEdges(point, edges, nodeMap, 3);
   assert.equal(snapped?.edgeId, "shortcut-bc");
-  assert.equal(snapToVerifiedEdges(point, [edges[2]!], nodeMap, 10), null);
+  assert.equal(
+    snapToVerifiedEdges(point, [edges[2]!], nodeMap, 10)?.edgeId,
+    "unverified-ac",
+  );
 });
 
 test("combined graph routes provisional OSM edges and returns provenance", () => {
@@ -302,22 +334,24 @@ test("component diagnostics distinguish disconnected verified paths", () => {
   assert.equal(findRoute(graph, "a", "isolated"), null);
 });
 
-test("snapping applies the same profile and active-block eligibility as graph construction", () => {
+test("snapping applies shortcut profile eligibility and explicit path blocks", () => {
   const map = new Map(nodes.map((node) => [node.id, node]));
   const nearShortcut = coordinate(0.0015, 0.00001);
   assert.equal(
-    snapToVerifiedEdges(nearShortcut, edges, map, 3, { profile: "wheelchair" }),
+    snapToVerifiedEdges(nearShortcut, [edges[1]!], map, 3, {
+      profile: "wheelchair",
+    }),
     null,
   );
   assert.equal(
-    snapToVerifiedEdges(nearShortcut, edges, map, 3, {
+    snapToVerifiedEdges(nearShortcut, [edges[1]!], map, 3, {
       profile: "healthy",
       activeBlocks: [{ active: true, edgeIds: ["shortcut-bc"] }],
     }),
     null,
   );
   assert.equal(
-    snapToVerifiedEdges(nearShortcut, edges, map, 3, {
+    snapToVerifiedEdges(nearShortcut, [edges[1]!], map, 3, {
       profile: "heavy_luggage",
       activeBlocks: [{ active: false, edgeIds: ["shortcut-bc"] }],
     })?.edgeId,

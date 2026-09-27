@@ -3,9 +3,11 @@ import {
   centredConnectorLabel,
   centredRoomLabel,
   containedRoomTranslation,
+  doorDisplayGeometry,
   doorLocalPoint,
   nearestDoorSnap,
   pointInPolygon,
+  polygonLabelPlacement,
   roomContainedInBoundary,
 } from "./geometry";
 import type { FloorFeature, FloorLayout, RoomFeature } from "./types";
@@ -102,6 +104,17 @@ describe("geometry-derived labels", () => {
     expect(label.x + label.width / 2).toBeCloseTo(35);
     expect(label.y + label.height / 2).toBeCloseTo(42);
   });
+
+  it("places the building label inside the usable region of a concave outline", () => {
+    const label = polygonLabelPlacement(concaveBoundary)!;
+    const centre = {
+      x: label.x + label.width / 2,
+      y: label.y + label.height / 2,
+    };
+    expect(pointInPolygon(centre, concaveBoundary)).toBe(true);
+    expect(label.width).toBeGreaterThan(0);
+    expect(label.fontSize).toBeGreaterThan(0);
+  });
 });
 
 describe("door attachment", () => {
@@ -153,5 +166,21 @@ describe("door attachment", () => {
     const snap = nearestDoorSnap({ x: 8, y: 0.15 }, layout(), 0.25);
     expect(snap?.parent).toEqual({ kind: "exterior", edgeIndex: 0 });
     expect(snap?.position).toBeCloseTo(0.8);
+  });
+
+  it("rotates the door symbol with its attached edge", () => {
+    const base = layout();
+    const door = {
+      id: "door-vertical",
+      kind: "door" as const,
+      name: "Side door",
+      parent: { kind: "exterior" as const, edgeIndex: 1 },
+      position: 0.5,
+      isExit: false,
+    };
+    const display = doorDisplayGeometry(door, base)!;
+    expect(display.rotation).toBeCloseTo(90);
+    expect(display.leafLength).toBeGreaterThan(0);
+    expect(display.point).toEqual({ x: 10, y: 5 });
   });
 });

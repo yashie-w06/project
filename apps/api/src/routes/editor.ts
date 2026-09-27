@@ -9,7 +9,14 @@ import {
   requireEditor,
   verifyEditorPassword,
 } from "../auth.js";
-import { coordinateSchema, pointSchema } from "../schemas.js";
+import {
+  campusCoordinateSchema,
+  coordinateSchema,
+  pointSchema,
+} from "../schemas.js";
+import { loadStoredPathFeatures } from "../paths.js";
+import { createLocalProjection } from "../routing/projection.js";
+import type { LonLat } from "../osm/types.js";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -56,15 +63,115 @@ const floorSchema = z.object({
   ),
 });
 const alertSchema = z.object({
-  coordinates: coordinateSchema,
+  coordinates: campusCoordinateSchema,
   description: z.string().trim().min(1).max(500),
-  edgeIds: z.array(z.string()).max(50).default([]),
 });
 const nodeSchema = z.object({
   id: z.string().min(1).max(120),
   coordinates: coordinateSchema,
   version: z.number().int().positive().default(1),
 });
+const pathPatchSchema = z
+  .object({
+    blocked: z.boolean().optional(),
+    note: z.string().trim().max(240).nullable().optional(),
+    version: z.number().int().positive(),
+  })
+  .refine((value) => value.blocked !== undefined || value.note !== undefined);
+const shortcutSchema = z.object({
+  id: z.string().uuid(),
+  coordinates: z.array(coordinateSchema).min(2).max(500),
+  endpoints: z.tuple([
+    z.object({
+      parentId: z.string().min(1),
+      coordinates: coordinateSchema,
+      parentVersion: z.number().int().positive(),
+    }),
+    z.object({
+      parentId: z.string().min(1),
+      coordinates: coordinateSchema,
+      parentVersion: z.number().int().positive(),
+    }),
+  ]),
+});
+
+function projectOnLine(point: LonLat, line: readonly LonLat[]) {
+  const projection = createLocalProjection(point);
+  const target = projection.project(point);
+  let best:
+    | {
+        segmentIndex: number;
+        fraction: number;
+        coordinates: [number, number];
+        distance: number;
+      }
+    | undefined;
+  for (let index = 0; index < line.length - 1; index++) {
+    const a = projection.project(line[index]!);
+    const b = projection.project(line[index + 1]!);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const denominator = dx * dx + dy * dy;
+    const fraction = denominator
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            ((target.x - a.x) * dx + (target.y - a.y) * dy) / denominator,
+          ),
+        )
+      : 0;
+    const projected = { x: a.x + fraction * dx, y: a.y + fraction * dy };
+    const distance = Math.hypot(target.x - projected.x, target.y - projected.y);
+    if (!best || distance < best.distance)
+      best = {
+        segmentIndex: index,
+        fraction,
+        coordinates: [...projection.unproject(projected)],
+        distance,
+      };
+  }
+  if (best && best.fraction <= 1e-9 && best.segmentIndex > 0) {
+    best.segmentIndex -= 1;
+    best.fraction = 1;
+  }
+  return best;
+}
+
+function simplePolyline(line: readonly LonLat[]): boolean {
+  if (line.length < 2) return false;
+  const projection = createLocalProjection(line[0]!);
+  const points = line.map((point) => projection.project(point));
+  if (
+    points.some(
+      (point, index) =>
+        index > 0 &&
+        Math.hypot(
+          point.x - points[index - 1]!.x,
+          point.y - points[index - 1]!.y,
+        ) < 0.05,
+    )
+  )
+    return false;
+  const intersects = (
+    a: (typeof points)[number],
+    b: (typeof points)[number],
+    c: (typeof points)[number],
+    d: (typeof points)[number],
+  ) => {
+    const orient = (p: typeof a, q: typeof a, r: typeof a) =>
+      Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+    return (
+      orient(a, b, c) * orient(a, b, d) < 0 &&
+      orient(c, d, a) * orient(c, d, b) < 0
+    );
+  };
+  for (let i = 0; i < points.length - 1; i++)
+    for (let j = i + 2; j < points.length - 1; j++)
+      if (intersects(points[i]!, points[i + 1]!, points[j]!, points[j + 1]!))
+        return false;
+  return true;
+}
 
 type Point = { x: number; y: number };
 function polygonFromBoundary(boundary: Record<string, unknown>): Point[] {
@@ -161,10 +268,8 @@ function validateFloorGeometry(floor: z.infer<typeof floorSchema>): string[] {
           `Door ${feature.id}: only a ground-floor door can be an exit`,
         );
       if (geometry.parent?.kind !== "exterior")
-        errors.push(`Door ${feature.id}: a room door cannot be an exit`);
-      if (!feature.outdoorPosition || !feature.linkedGraphNodeId)
         errors.push(
-          `Door ${feature.id}: a published exit needs outdoor coordinates and a verified graph link`,
+          `Door ${feature.id}: a room door cannot be marked as a campus exit`,
         );
     }
   }
@@ -212,26 +317,284 @@ export function editorRoutes(
       next(e);
     }
   });
+  router.delete("/messages/:id", async (request, response, next) => {
+    try {
+      const result = await db.query(
+        "DELETE FROM messages WHERE id=$1 RETURNING id",
+        [request.params.id],
+      );
+      if (!result.rowCount)
+        return response.status(404).json({ error: "Unknown message" });
+      response.status(204).end();
+    } catch (e) {
+      next(e);
+    }
+  });
   router.get("/graph", async (_request, response, next) => {
     try {
-      const [nodes, edges, candidates, points, alerts] = await Promise.all([
-        db.query("SELECT * FROM route_nodes ORDER BY id"),
-        db.query("SELECT * FROM route_edges ORDER BY id"),
-        db.query("SELECT * FROM osm_candidates ORDER BY source_way_id"),
-        db.query("SELECT * FROM outdoor_points ORDER BY name"),
+      const [paths, points, alerts] = await Promise.all([
+        loadStoredPathFeatures(db),
         db.query(
-          `SELECT a.*, COALESCE(json_agg(are.route_edge_id) FILTER (WHERE are.route_edge_id IS NOT NULL), '[]') AS edge_ids FROM alerts a LEFT JOIN alert_route_edges are ON are.alert_id=a.id GROUP BY a.id ORDER BY a.created_at DESC`,
+          "SELECT id,name,longitude,latitude,description,version FROM outdoor_points ORDER BY name,id",
+        ),
+        db.query(
+          "SELECT id,longitude,latitude,description,version FROM alerts ORDER BY created_at DESC",
         ),
       ]);
       response.json({
-        nodes: nodes.rows,
-        edges: edges.rows,
-        candidates: candidates.rows,
-        points: points.rows,
-        alerts: alerts.rows,
+        paths: paths.map((path) => ({
+          id: path.id,
+          name: path.name,
+          coordinates: path.coordinates,
+          kind: path.kind,
+          source: path.source,
+          blocked: path.blocked,
+          note: path.note,
+          version: path.version,
+        })),
+        points: points.rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          coordinates: [row.longitude, row.latitude],
+          note: row.description,
+          version: row.version,
+        })),
+        alerts: alerts.rows.map((row) => ({
+          id: row.id,
+          coordinates: [row.longitude, row.latitude],
+          description: row.description,
+          version: row.version ?? 1,
+        })),
       });
     } catch (e) {
       next(e);
+    }
+  });
+
+  router.patch("/paths/:id", async (request, response, next) => {
+    const parsed = pathPatchSchema.safeParse(request.body);
+    if (!parsed.success)
+      return response.status(400).json({
+        error: "Invalid path update",
+        details: parsed.error.flatten(),
+      });
+    const id = request.params.id;
+    const value = parsed.data;
+    try {
+      const edge = await db.query(
+        `UPDATE route_edges SET blocked=COALESCE($1,blocked),note=CASE WHEN $2 THEN $3 ELSE note END,version=version+1
+         WHERE id=$4 AND version=$5 RETURNING id,blocked,note,version`,
+        [
+          value.blocked ?? null,
+          value.note !== undefined,
+          value.note ?? null,
+          id,
+          value.version,
+        ],
+      );
+      const updated = edge.rowCount
+        ? edge
+        : await db.query(
+            `UPDATE osm_candidates SET blocked=COALESCE($1,blocked),note=CASE WHEN $2 THEN $3 ELSE note END,version=version+1,updated_at=now()
+         WHERE (id=$4 OR 'osm-'||source_way_id=$4) AND version=$5 RETURNING 'osm-'||source_way_id AS id,blocked,note,version`,
+            [
+              value.blocked ?? null,
+              value.note !== undefined,
+              value.note ?? null,
+              id,
+              value.version,
+            ],
+          );
+      if (!updated.rowCount) {
+        const exists = await db.query(
+          "SELECT 1 FROM route_edges WHERE id=$1 UNION ALL SELECT 1 FROM osm_candidates WHERE id=$1 OR 'osm-'||source_way_id=$1 LIMIT 1",
+          [id],
+        );
+        return response.status(exists.rowCount ? 409 : 404).json({
+          error: exists.rowCount ? "Path changed elsewhere" : "Unknown path",
+          affectedIds: [id],
+        });
+      }
+      if (value.blocked !== undefined) onGraphChange();
+      response.json(updated.rows[0]);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.post("/paths", async (request, response, next) => {
+    const parsed = shortcutSchema.safeParse(request.body);
+    if (!parsed.success)
+      return response.status(400).json({
+        error: "Invalid shortcut path",
+        details: parsed.error.flatten(),
+      });
+    const shortcut = parsed.data;
+    const paths = await loadStoredPathFeatures(db);
+    const resolved = shortcut.endpoints.map((endpoint) => {
+      const path = paths.find((item) => item.id === endpoint.parentId);
+      const projection = path
+        ? projectOnLine(endpoint.coordinates, path.coordinates)
+        : undefined;
+      return { endpoint, path, projection };
+    });
+    if (
+      resolved.some(
+        ({ path, projection }) =>
+          !path || !projection || projection.distance > 5,
+      )
+    )
+      return response.status(400).json({
+        error:
+          "Both shortcut endpoints must snap within 5 metres of an eligible campus path",
+      });
+    if (
+      resolved.some(
+        ({ path, endpoint }) => path!.version !== endpoint.parentVersion,
+      )
+    )
+      return response.status(409).json({
+        error: "A parent path changed after it was selected",
+        affectedIds: shortcut.endpoints.map((endpoint) => endpoint.parentId),
+      });
+    const first = resolved[0]!;
+    const last = resolved[1]!;
+    const firstProjection = first.projection!;
+    const lastProjection = last.projection!;
+    const start = firstProjection.coordinates;
+    const end = lastProjection.coordinates;
+    const line = shortcut.coordinates.map((coordinate, index, coordinates) =>
+      index === 0 ? start : index === coordinates.length - 1 ? end : coordinate,
+    );
+    if (
+      line.some(
+        ([lon, lat]) =>
+          lon < 75.867 || lon > 75.877 || lat < 22.722 || lat > 22.73,
+      ) ||
+      !simplePolyline(line)
+    )
+      return response.status(400).json({
+        error:
+          "Shortcut geometry must be a simple campus line without self-crossings",
+      });
+    const local = createLocalProjection(start);
+    if (
+      Math.hypot(
+        local.project(start).x - local.project(end).x,
+        local.project(start).y - local.project(end).y,
+      ) < 0.5
+    )
+      return response
+        .status(400)
+        .json({ error: "Shortcut endpoints must be distinct" });
+    const junctionIds = await Promise.all(
+      resolved.map(async ({ path, projection }) => {
+        const lastIndex = path!.coordinates.length - 2;
+        if (path!.source === "osm") {
+          if (projection!.segmentIndex === 0 && projection!.fraction <= 1e-9)
+            return `osm-node:${path!.sourceNodeIds[0]}`;
+          if (
+            projection!.segmentIndex === lastIndex &&
+            projection!.fraction >= 1 - 1e-9
+          )
+            return `osm-node:${path!.sourceNodeIds.at(-1)}`;
+        } else {
+          const endpoints = await db.query(
+            "SELECT from_node_id,to_node_id FROM route_edges WHERE id=$1",
+            [path!.id],
+          );
+          if (
+            endpoints.rowCount &&
+            projection!.segmentIndex === 0 &&
+            projection!.fraction <= 1e-9
+          )
+            return endpoints.rows[0]!.from_node_id as string;
+          if (
+            endpoints.rowCount &&
+            projection!.segmentIndex === lastIndex &&
+            projection!.fraction >= 1 - 1e-9
+          )
+            return endpoints.rows[0]!.to_node_id as string;
+        }
+        const parentId =
+          path!.source === "osm" ? `osm-${path!.sourceOsmId}` : path!.id;
+        const fraction = Math.round(projection!.fraction * 1_000_000_000);
+        return `junction:${parentId}:${projection!.segmentIndex}:${fraction}`;
+      }),
+    );
+    if (junctionIds[0] === junctionIds[1])
+      return response.status(400).json({
+        error: "Shortcut endpoints must attach to distinct path locations",
+      });
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const snapValues: unknown[][] = [];
+      for (let index = 0; index < 2; index++) {
+        const { path, projection, endpoint } = resolved[index]!;
+        let currentVersion =
+          path!.source === "osm"
+            ? await client.query(
+                "SELECT version FROM route_edges WHERE id=$1 AND source_osm_id=$2",
+                [path!.id, path!.sourceOsmId],
+              )
+            : await client.query(
+                "SELECT version FROM route_edges WHERE id=$1",
+                [path!.id],
+              );
+        if (path!.source === "osm" && !currentVersion.rowCount)
+          currentVersion = await client.query(
+            "SELECT version FROM osm_candidates WHERE source_way_id=$1",
+            [path!.sourceOsmId],
+          );
+        if (
+          !currentVersion.rowCount ||
+          currentVersion.rows[0]!.version !== endpoint.parentVersion
+        ) {
+          await client.query("ROLLBACK");
+          return response.status(409).json({
+            error: "A parent path changed while saving",
+            affectedIds: [endpoint.parentId],
+          });
+        }
+        const junctionId = junctionIds[index]!;
+        await client.query(
+          "INSERT INTO route_nodes(id,longitude,latitude,version) VALUES($1,$2,$3,1) ON CONFLICT(id) DO UPDATE SET longitude=EXCLUDED.longitude,latitude=EXCLUDED.latitude,version=route_nodes.version+1",
+          [junctionId, ...projection!.coordinates],
+        );
+        const featureId =
+          path!.source === "osm" ? `osm-${path!.sourceOsmId}` : path!.id;
+        snapValues.push([
+          shortcut.id,
+          index,
+          featureId,
+          path!.source,
+          projection!.segmentIndex,
+          projection!.fraction,
+          endpoint.parentVersion,
+          junctionId,
+          JSON.stringify(projection!.coordinates),
+        ]);
+      }
+      await client.query(
+        `INSERT INTO route_edges(id,from_node_id,to_node_id,coordinates,kind,verified,published,blocked,one_way,version)
+         VALUES($1,$2,$3,$4,'shortcut',true,true,false,false,1)`,
+        [shortcut.id, junctionIds[0], junctionIds[1], JSON.stringify(line)],
+      );
+      for (const values of snapValues)
+        await client.query(
+          `INSERT INTO path_snap_connections(shortcut_path_id,endpoint_index,parent_feature_id,parent_source,parent_segment_index,parent_segment_fraction,parent_version,junction_node_id,coordinates)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          values,
+        );
+      await client.query("COMMIT");
+      onGraphChange();
+      response.status(201).json({ id: shortcut.id, version: 1 });
+    } catch (e) {
+      await client.query("ROLLBACK");
+      next(e);
+    } finally {
+      client.release();
     }
   });
 
@@ -377,18 +740,47 @@ export function editorRoutes(
       return response
         .status(400)
         .json({ error: "Invalid point", details: parsed.error.flatten() });
-    const { id, name, coordinates, published, version } = parsed.data;
+    const { id, name, coordinates, version } = parsed.data;
+    const description = parsed.data.note ?? parsed.data.description;
     try {
       const result = await db.query(
-        `INSERT INTO outdoor_points(id,name,longitude,latitude,published,version) VALUES($1,$2,$3,$4,$5,1)
-        ON CONFLICT(id) DO UPDATE SET name=$2,longitude=$3,latitude=$4,published=$5,version=outdoor_points.version+1 WHERE outdoor_points.version=$6 RETURNING *`,
-        [id, name, ...coordinates, published, version],
+        `INSERT INTO outdoor_points(id,name,longitude,latitude,description,published,version) VALUES($1,$2,$3,$4,$5,true,1)
+        ON CONFLICT(id) DO UPDATE SET name=$2,longitude=$3,latitude=$4,description=$5,published=true,version=outdoor_points.version+1 WHERE outdoor_points.version=$6 RETURNING *`,
+        [id, name, ...coordinates, description, version],
       );
       if (!result.rowCount)
         return response
           .status(409)
           .json({ error: "Point was changed elsewhere", affectedIds: [id] });
       response.json(result.rows[0]);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.delete("/points/:id", async (request, response, next) => {
+    try {
+      const result = await db.query(
+        "DELETE FROM outdoor_points WHERE id=$1 RETURNING id",
+        [request.params.id],
+      );
+      if (!result.rowCount)
+        return response.status(404).json({ error: "Unknown point" });
+      response.status(204).end();
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  router.delete("/points/:id", async (request, response, next) => {
+    try {
+      const result = await db.query(
+        "DELETE FROM outdoor_points WHERE id=$1 RETURNING id",
+        [request.params.id],
+      );
+      if (!result.rowCount)
+        return response.status(404).json({ error: "Unknown point" });
+      response.status(204).end();
     } catch (e) {
       next(e);
     }
@@ -579,44 +971,6 @@ export function editorRoutes(
       return response
         .status(400)
         .json({ error: "Floor geometry is invalid", details: geometryErrors });
-    if (floor.status === "published") {
-      for (const feature of floor.features.filter(
-        (f) => f.kind === "door" && f.isExit,
-      )) {
-        const linked = await db.query(
-          `SELECT 1 FROM route_nodes n JOIN route_edges e ON (e.from_node_id=n.id OR e.to_node_id=n.id) WHERE n.id=$1 AND e.kind='main' AND e.verified AND e.published LIMIT 1`,
-          [feature.linkedGraphNodeId],
-        );
-        if (!linked.rowCount)
-          return response.status(400).json({
-            error: `Exit ${feature.id} is not linked to a verified published main path`,
-          });
-      }
-      for (const feature of floor.features.filter(
-        (f) =>
-          (f.kind === "lift" || f.kind === "stairs") &&
-          f.connectorId &&
-          f.servedFloors,
-      )) {
-        for (const served of feature.servedFloors!) {
-          if (served === floor.floorNumber) continue;
-          const saved = await db.query(
-            `SELECT 1 FROM floor_features ff JOIN floors f ON f.id=ff.floor_id WHERE f.building_id=$1 AND f.floor_number=$2 AND ff.kind=$3 AND ff.connector_id=$4 AND ff.status='published' AND f.status='published' LIMIT 1`,
-            [floor.buildingId, served, feature.kind, feature.connectorId],
-          );
-          const included = floor.features.some(
-            (other) =>
-              other.kind === feature.kind &&
-              other.connectorId === feature.connectorId &&
-              served === floor.floorNumber,
-          );
-          if (!saved.rowCount && !included)
-            return response.status(400).json({
-              error: `Connector ${feature.connectorId} has no matching saved ${feature.kind} marker on floor ${served}`,
-            });
-        }
-      }
-    }
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -683,37 +1037,16 @@ export function editorRoutes(
       return response
         .status(400)
         .json({ error: "Invalid alert", details: parsed.error.flatten() });
-    const client = await db.connect();
     const id = randomUUID();
     try {
-      await client.query("BEGIN");
-      const edgeCheck = await client.query(
-        "SELECT id FROM route_edges WHERE id=ANY($1::text[])",
-        [parsed.data.edgeIds],
-      );
-      if (edgeCheck.rowCount !== parsed.data.edgeIds.length) {
-        await client.query("ROLLBACK");
-        return response
-          .status(404)
-          .json({ error: "One or more route edges are unknown" });
-      }
-      await client.query(
+      await db.query(
         "INSERT INTO alerts(id,longitude,latitude,description) VALUES($1,$2,$3,$4)",
         [id, ...parsed.data.coordinates, parsed.data.description],
       );
-      for (const edgeId of parsed.data.edgeIds)
-        await client.query(
-          "INSERT INTO alert_route_edges(alert_id,route_edge_id) VALUES($1,$2)",
-          [id, edgeId],
-        );
-      await client.query("COMMIT");
       onGraphChange();
       response.status(201).json({ id });
     } catch (e) {
-      await client.query("ROLLBACK");
       next(e);
-    } finally {
-      client.release();
     }
   });
   router.patch("/alerts/:id/active", async (request, response, next) => {

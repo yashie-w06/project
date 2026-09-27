@@ -60,17 +60,9 @@
     transparent 5px 8px
   );
 }
-.map-legend .legend-reference {
-  background: repeating-linear-gradient(
-    90deg,
-    #60707a 0 3px,
-    transparent 3px 7px
-  );
-}
-.map-legend .legend-provisional {
-  background: repeating-linear-gradient(
-    90deg,
-    #d18a14 0 6px,
-    transparent 6px 10px
-  );
+.map-legend .legend-alert {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b23b34;
 }

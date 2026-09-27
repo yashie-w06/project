@@ -1,34 +1,30 @@
-# SGSITS outdoor route field verification
+# SGSITS outdoor route field verification — later survey task
 
-The importer classifies suitable campus service geometry for clearly labelled **provisional** routing. It does not approve or field-verify any row. Do not approve from aerial imagery alone. Walk the complete geometry shown by the OSM way link and record one decision:
+The physical route survey is deferred. This document is a worksheet for a future campus walk, not a deployment gate. The current product can route on structurally eligible OSM walking geometry and editor-drawn campus paths; these paths are approximate map data, not claims of field inspection or accessibility. A path connects to another only through explicit shared OSM topology or a saved editor shortcut attachment. Nearby lines and visual crossings do not create a connection.
 
-**Deployment status:** the physical survey is deferred by the project owner. Eligible `UNVERIFIED` service ways may appear in public A* only as dashed suggested/provisional map data with an explicit warning. They remain unconfirmed and have no field-verified accessibility claim. Rejected and `needs_edit` rows are excluded. Locations outside the eligible connected graph show “No verified route available.”
+Do not change a candidate's status based on aerial imagery alone. During the later survey, walk the complete geometry shown by each OSM way link and record observations. Existing reviewer decisions remain preserved as legacy audit data; they are not evidence of an on-site survey and are not required for current structural routing eligibility. Explicitly blocked or structurally unsuitable paths remain excluded.
 
-- `main`: continuous ordinary outdoor walking surface, including wheelchair use for this prototype.
+- `main`: continuous ordinary outdoor walking surface.
 - `shortcut`: physically walkable unofficial shortcut; excluded from wheelchair routing.
-- `needs_edit`: only part is walkable, geometry crosses a building/wall, endpoint is wrong, or a missing junction must be drawn explicitly.
+- `needs_edit`: only part is walkable, geometry crosses a building or wall, an endpoint is wrong, or a missing junction must be drawn explicitly.
 - `reject`: not a campus walking route.
 
-For `main` or `shortcut`, also confirm there is no locked gate, wall, building crossing, unrepresented level crossing, or inaccessible gap. A visual crossing is not a junction unless the paths physically meet at the same level.
+| OSM way                                                    | OSM classification                     | Survey status                                                                            |
+| ---------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [202920180](https://www.openstreetmap.org/way/202920180)   | private service                        | Not surveyed                                                                             |
+| [202920181](https://www.openstreetmap.org/way/202920181)   | private service                        | Not surveyed                                                                             |
+| [202920183](https://www.openstreetmap.org/way/202920183)   | private service                        | Not surveyed                                                                             |
+| [202920184](https://www.openstreetmap.org/way/202920184)   | private service                        | Not surveyed                                                                             |
+| [202920185](https://www.openstreetmap.org/way/202920185)   | private service                        | Not surveyed                                                                             |
+| [202920186](https://www.openstreetmap.org/way/202920186)   | private service                        | Not surveyed                                                                             |
+| [202920187](https://www.openstreetmap.org/way/202920187)   | private service                        | Not surveyed                                                                             |
+| [202920188](https://www.openstreetmap.org/way/202920188)   | private service                        | Not surveyed                                                                             |
+| [202920189](https://www.openstreetmap.org/way/202920189)   | private service                        | Not surveyed                                                                             |
+| [202920190](https://www.openstreetmap.org/way/202920190)   | private service                        | Not surveyed                                                                             |
+| [320181214](https://www.openstreetmap.org/way/320181214)   | private service                        | Not surveyed                                                                             |
+| [1264750241](https://www.openstreetmap.org/way/1264750241) | private service                        | Not surveyed                                                                             |
+| [995119335](https://www.openstreetmap.org/way/995119335)   | Race Course Road, tertiary carriageway | Check for separate safe walking geometry; do not survey the carriageway as a campus path |
+| [995119337](https://www.openstreetmap.org/way/995119337)   | Race Course Road, tertiary carriageway | Check for separate safe walking geometry; do not survey the carriageway as a campus path |
+| [1264482101](https://www.openstreetmap.org/way/1264482101) | tertiary road link                     | Check for separate safe walking geometry; do not survey the road link as a campus path   |
 
-| OSM way                                                    | OSM classification                     | Start `[lon, lat]`         | End `[lon, lat]`           | Field decision                                               |
-| ---------------------------------------------------------- | -------------------------------------- | -------------------------- | -------------------------- | ------------------------------------------------------------ |
-| [202920180](https://www.openstreetmap.org/way/202920180)   | private service                        | `[75.8728246, 22.7247319]` | `[75.8728725, 22.7255981]` | `UNVERIFIED`                                                 |
-| [202920181](https://www.openstreetmap.org/way/202920181)   | private service                        | `[75.8738303, 22.7273593]` | `[75.8733314, 22.7273714]` | `UNVERIFIED`                                                 |
-| [202920183](https://www.openstreetmap.org/way/202920183)   | private service                        | `[75.8729746, 22.7263964]` | `[75.8730185, 22.7271623]` | `UNVERIFIED`                                                 |
-| [202920184](https://www.openstreetmap.org/way/202920184)   | private service                        | `[75.8737494, 22.7263419]` | `[75.8743249, 22.7273295]` | `UNVERIFIED`                                                 |
-| [202920185](https://www.openstreetmap.org/way/202920185)   | private service                        | `[75.8700046, 22.7258188]` | `[75.8699723, 22.7257137]` | `UNVERIFIED`                                                 |
-| [202920186](https://www.openstreetmap.org/way/202920186)   | private service                        | `[75.8728725, 22.7255981]` | `[75.8735975, 22.7255913]` | `UNVERIFIED`                                                 |
-| [202920187](https://www.openstreetmap.org/way/202920187)   | private service                        | `[75.8729509, 22.7260854]` | `[75.8730534, 22.7276620]` | `UNVERIFIED`                                                 |
-| [202920188](https://www.openstreetmap.org/way/202920188)   | private service                        | `[75.8728725, 22.7255981]` | `[75.8742620, 22.7263026]` | `UNVERIFIED`                                                 |
-| [202920189](https://www.openstreetmap.org/way/202920189)   | private service                        | `[75.8699296, 22.7248628]` | `[75.8728725, 22.7255981]` | `UNVERIFIED`                                                 |
-| [202920190](https://www.openstreetmap.org/way/202920190)   | private service                        | `[75.8735975, 22.7255913]` | `[75.8699584, 22.7251216]` | `UNVERIFIED`                                                 |
-| [320181214](https://www.openstreetmap.org/way/320181214)   | private service                        | `[75.8730185, 22.7271623]` | `[75.8730534, 22.7276620]` | `UNVERIFIED`                                                 |
-| [1264750241](https://www.openstreetmap.org/way/1264750241) | private service                        | `[75.8723334, 22.7260997]` | `[75.8700046, 22.7258188]` | `UNVERIFIED`                                                 |
-| [995119335](https://www.openstreetmap.org/way/995119335)   | Race Course Road, tertiary carriageway | `[75.8690247, 22.7248561]` | `[75.8740818, 22.7246865]` | `reject` unless a separate safe walking geometry is surveyed |
-| [995119337](https://www.openstreetmap.org/way/995119337)   | Race Course Road, tertiary carriageway | `[75.8740943, 22.7246153]` | `[75.8690188, 22.7247512]` | `reject` unless a separate safe walking geometry is surveyed |
-| [1264482101](https://www.openstreetmap.org/way/1264482101) | tertiary road link                     | `[75.8737987, 22.7246908]` | `[75.8741478, 22.7248374]` | `reject` unless a separate safe walking geometry is surveyed |
-
-## Missing paths
-
-During the same walk, note any major pedestrian path absent from the table, including both endpoint coordinates and every turn. Record whether it is an ordinary main path or an unofficial shortcut, and which existing verified path/node it physically meets. Do not infer a connection merely from close map geometry.
+During the walk, check for locked gates, walls, building crossings, unrepresented level crossings, and inaccessible gaps. Note any major missing pedestrian path, both endpoints and every turn, whether it is a main path or shortcut, and which existing path or node it physically meets. Do not infer a connection from proximity alone.

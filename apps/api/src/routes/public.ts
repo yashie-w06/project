@@ -9,6 +9,7 @@ import type {
   Polygon,
 } from "geojson";
 import type { Database } from "../db.js";
+import { loadStoredPathFeatures, pathAsFeature } from "../paths.js";
 import {
   messageSchema,
   routeRequestSchema,
@@ -29,9 +30,9 @@ type RouteResult =
       notices: string[];
       segments: Array<{
         geometry: LineString;
-        source: "editor" | "osm" | "approach";
-        confidence: "confirmed" | "provisional" | "approximate";
-        sourceId?: string;
+        pathId: string;
+        kind: "main" | "shortcut";
+        note: string | null;
       }>;
       approaches: Array<{
         role: "start" | "destination";
@@ -40,7 +41,6 @@ type RouteResult =
         network: [number, number];
         approximate: true;
       }>;
-      containsProvisional: boolean;
       selectedEntranceDoorId?: string;
       snaps?: unknown[];
     }
@@ -68,19 +68,14 @@ export function publicRoutes(
 
   router.get("/map", async (_request, response, next) => {
     try {
-      const [buildings, candidates, edges, points, alerts] = await Promise.all([
+      const [buildings, paths, points, alerts] = await Promise.all([
         db.query("SELECT id, name, footprint FROM buildings ORDER BY name"),
+        loadStoredPathFeatures(db),
         db.query(
-          "SELECT id, source_way_id, coordinates, reviewer_decision, provisional_eligible, provisional_exclusion_reason FROM osm_candidates ORDER BY source_way_id",
+          "SELECT id,name,longitude,latitude,description FROM outdoor_points ORDER BY name,id",
         ),
         db.query(
-          "SELECT id, kind, coordinates, blocked FROM route_edges WHERE verified AND published ORDER BY id",
-        ),
-        db.query(
-          "SELECT id, name, longitude, latitude FROM outdoor_points WHERE published ORDER BY name",
-        ),
-        db.query(
-          "SELECT id, longitude, latitude, description FROM alerts WHERE active AND published ORDER BY created_at DESC",
+          "SELECT id,longitude,latitude,description FROM alerts ORDER BY created_at DESC",
         ),
       ]);
       const buildingFeatures = buildings.rows.map((row): Feature<Polygon> => ({
@@ -89,47 +84,15 @@ export function publicRoutes(
         properties: { id: row.id, name: row.name },
         geometry: row.footprint,
       }));
-      const referenceFeatures = candidates.rows
-        .filter((row) => !row.provisional_eligible)
-        .map((row): Feature<LineString> => ({
-          type: "Feature",
-          id: row.id,
-          properties: {
-            sourceWayId: row.source_way_id,
-            decision: row.reviewer_decision,
-            exclusionReason: row.provisional_exclusion_reason,
-          },
-          geometry: { type: "LineString", coordinates: row.coordinates },
-        }));
-      const provisionalFeatures = candidates.rows
-        .filter((row) => row.provisional_eligible)
-        .map((row): Feature<LineString> => ({
-          type: "Feature",
-          id: row.id,
-          properties: {
-            id: row.id,
-            sourceWayId: row.source_way_id,
-            status: "provisional",
-          },
-          geometry: { type: "LineString", coordinates: row.coordinates },
-        }));
-      const verifiedFeatures = edges.rows.map((row): Feature<LineString> => ({
-        type: "Feature",
-        id: row.id,
-        properties: { id: row.id, kind: row.kind, blocked: row.blocked },
-        geometry: { type: "LineString", coordinates: row.coordinates },
-      }));
       const pointFeatures = points.rows.map((row): Feature => ({
         type: "Feature",
         id: row.id,
-        properties: { id: row.id, name: row.name },
+        properties: { id: row.id, name: row.name, note: row.description },
         geometry: { type: "Point", coordinates: [row.longitude, row.latitude] },
       }));
       response.json({
         buildings: collection(buildingFeatures),
-        referencePaths: collection(referenceFeatures),
-        provisionalPaths: collection(provisionalFeatures),
-        verifiedPaths: collection(verifiedFeatures),
+        paths: collection(paths.map(pathAsFeature)),
         points: collection(pointFeatures),
         alerts: alerts.rows.map((row) => ({
           id: row.id,
@@ -162,10 +125,10 @@ export function publicRoutes(
       if (!building.rowCount)
         return response.status(404).json({ error: "Unknown building" });
       const floors = await db.query(
-        `SELECT f.id,f.floor_number,f.status,
-        COALESCE(json_agg(json_build_object('id',ff.id,'kind',ff.kind,'name',ff.name,'isExit',ff.is_exit,'linkedGraphNodeId',ff.linked_graph_node_id)) FILTER (WHERE ff.id IS NOT NULL AND ff.status='published'),'[]') features
+        `SELECT f.id,f.floor_number,
+        COALESCE(json_agg(json_build_object('id',ff.id,'kind',ff.kind,'name',ff.name,'isExit',ff.is_exit,'linkedGraphNodeId',ff.linked_graph_node_id)) FILTER (WHERE ff.id IS NOT NULL),'[]') features
         FROM floors f LEFT JOIN floor_features ff ON ff.floor_id=f.id
-        WHERE f.building_id=$1 AND f.status='published' GROUP BY f.id ORDER BY f.floor_number`,
+        WHERE f.building_id=$1 GROUP BY f.id ORDER BY f.floor_number`,
         [request.params.id],
       );
       response.json({ building: building.rows[0], floors: floors.rows });
@@ -180,24 +143,23 @@ export function publicRoutes(
       try {
         const result = await db.query(
           `SELECT f.*, COALESCE(json_agg(ff ORDER BY ff.id) FILTER (WHERE ff.id IS NOT NULL), '[]') AS features
-        FROM floors f LEFT JOIN floor_features ff ON ff.floor_id=f.id AND ff.status='published'
-        WHERE f.building_id=$1 AND f.floor_number=$2 AND f.status='published' GROUP BY f.id`,
+        FROM floors f LEFT JOIN floor_features ff ON ff.floor_id=f.id
+        WHERE f.building_id=$1 AND f.floor_number=$2 GROUP BY f.id`,
           [request.params.id, Number(request.params.number)],
         );
         if (!result.rowCount)
-          return response.status(404).json({ error: "No floor layout mapped" });
+          return response.status(404).json({ error: "No data available" });
         const floor = result.rows[0];
-        const connectors = floor.features.filter(
-          (f: { kind: string; connector_id?: string }) =>
-            (f.kind === "lift" || f.kind === "stairs") && f.connector_id,
-        );
         response.json({
+          id: floor.id,
+          buildingId: floor.building_id,
+          floorNumber: floor.floor_number,
+          version: floor.version,
           boundary: floor.boundary,
           localWidth: floor.local_width,
           localHeight: floor.local_height,
           mapTransform: floor.map_transform,
           features: floor.features,
-          connectors,
         });
       } catch (error) {
         next(error);
@@ -213,8 +175,7 @@ export function publicRoutes(
       const result = await db.query(
         `SELECT * FROM (
         SELECT 'building' AS kind, b.id, b.name, b.id AS building_id, NULL::int AS floor_number, NULL::float8 AS longitude, NULL::float8 AS latitude, b.name AS context FROM buildings b WHERE b.name ILIKE $1
-        UNION ALL SELECT 'point', p.id, p.name, NULL, NULL, p.longitude, p.latitude, 'Outdoor point' FROM outdoor_points p WHERE p.published AND p.name ILIKE $1
-        UNION ALL SELECT ff.kind, ff.id, ff.name, f.building_id, f.floor_number, NULL, NULL, b.name || ' · floor ' || f.floor_number FROM floor_features ff JOIN floors f ON f.id=ff.floor_id JOIN buildings b ON b.id=f.building_id WHERE ff.status='published' AND f.status='published' AND ff.name ILIKE $1
+        UNION ALL SELECT 'point', p.id, p.name, NULL, NULL, p.longitude, p.latitude, 'Outdoor point' FROM outdoor_points p WHERE p.name ILIKE $1
       ) matches ORDER BY name LIMIT 20`,
         [pattern],
       );

@@ -49,6 +49,9 @@ export interface OsmPathCandidate {
   readonly importStatus: "imported";
   readonly reviewerDecision: OsmReviewDecision;
   readonly geometry: Feature<LineString>;
+  readonly blocked?: boolean;
+  readonly note?: string | null;
+  readonly version?: number;
 }
 
 export interface OsmCandidateSegment {

@@ -151,7 +151,7 @@ test("provisional graph splits deterministically only at shared OSM nodes", () =
   );
 });
 
-test("review decisions, barriers, and building interiors exclude provisional ways", () => {
+test("legacy review flags do not gate valid ways; barriers and building interiors still exclude", () => {
   const xml = `<osm version="0.6">
     <node id="1" lat="0" lon="-1"/><node id="2" lat="0" lon="1"/>
     <node id="3" lat="2" lon="-1"/><node id="4" lat="2" lon="1"><tag k="barrier" v="wall"/></node>
@@ -182,16 +182,19 @@ test("review decisions, barriers, and building interiors exclude provisional way
     true,
   );
   const graph = buildProvisionalOsmGraph({
-    candidates,
+    candidates: candidates.map((candidate) =>
+      candidate.sourceWayId === "12"
+        ? { ...candidate, reviewerDecision: "rejected" as const }
+        : candidate,
+    ),
     buildings: [
       { id: "b", sourceWayId: "b", name: null, levels: null, footprint },
     ],
-    decisions: new Map([["12", "needs_edit"]]),
   });
-  assert.equal(graph.edges.length, 0);
+  assert.equal(graph.edges.length, 1);
   assert.deepEqual(graph.excluded, [
     { sourceWayId: "10", reason: "crosses_building" },
     { sourceWayId: "11", reason: "blocked_by_barrier" },
-    { sourceWayId: "12", reason: "review_needs_edit" },
   ]);
+  assert.equal(graph.edges[0]?.sourceOsmId, "12");
 });

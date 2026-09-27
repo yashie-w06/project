@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import request from "supertest";
 import { createApp } from "./server.js";
+import { createEditorToken } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Database } from "./db.js";
 
@@ -120,13 +121,15 @@ test("unlinked buildings use provisional OSM geometry and approximate boundary a
     });
   assert.equal(response.status, 200);
   assert.equal(response.body.status, "ok");
-  assert.equal(response.body.containsProvisional, true);
   assert.equal(response.body.approaches.length, 2);
+  assert.ok(response.body.segments.length > 0);
   assert.ok(
-    response.body.segments.some(
-      (segment: { source: string }) => segment.source === "osm",
+    response.body.segments.every(
+      (segment: { pathId: string; kind: string }) =>
+        Boolean(segment.pathId) && segment.kind === "main",
     ),
   );
+  assert.ok(response.body.notices.includes("Building approach."));
   assert.deepEqual(
     response.body.geometry.coordinates[0],
     response.body.approaches[0].boundary,
@@ -134,5 +137,67 @@ test("unlinked buildings use provisional OSM geometry and approximate boundary a
   assert.deepEqual(
     response.body.geometry.coordinates.at(-1),
     response.body.approaches[1].boundary,
+  );
+});
+
+test("shortcut creation validates both snaps and persists durable parent connections", async () => {
+  const calls: string[] = [];
+  const candidate = {
+    id: "candidate-42",
+    source_way_id: "42",
+    source_node_ids: ["n1", "n2"],
+    coordinates: [
+      [75.871, 22.726],
+      [75.872, 22.726],
+    ],
+    tags: { highway: "footway" },
+    version: 1,
+  };
+  const fixtureDb = {
+    query: async (sql: string) => {
+      if (sql.includes("FROM osm_candidates"))
+        return { rowCount: 1, rows: [candidate] };
+      return { rowCount: 0, rows: [] };
+    },
+    connect: async () => ({
+      query: async (sql: string) => {
+        calls.push(sql);
+        if (sql.includes("SELECT version FROM route_edges"))
+          return { rowCount: 0, rows: [] };
+        if (sql.includes("SELECT version FROM osm_candidates"))
+          return { rowCount: 1, rows: [{ version: 1 }] };
+        return { rowCount: 1, rows: [] };
+      },
+      release: () => undefined,
+    }),
+    end: async () => undefined,
+  } as unknown as Database;
+  const token = await createEditorToken(config);
+  const response = await request(createApp(config, fixtureDb))
+    .post("/api/editor/paths")
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      id: "123e4567-e89b-42d3-a456-426614174000",
+      coordinates: [
+        [75.871, 22.726],
+        [75.8715, 22.7262],
+        [75.872, 22.726],
+      ],
+      endpoints: [
+        { parentId: "osm-42", coordinates: [75.871, 22.726], parentVersion: 1 },
+        { parentId: "osm-42", coordinates: [75.872, 22.726], parentVersion: 1 },
+      ],
+    });
+  assert.equal(response.status, 201);
+  assert.equal(
+    calls.filter((sql) => sql.includes("INSERT INTO path_snap_connections"))
+      .length,
+    2,
+  );
+  assert.ok(
+    calls.findIndex((sql) => sql.includes("INSERT INTO route_edges")) <
+      calls.findIndex((sql) =>
+        sql.includes("INSERT INTO path_snap_connections"),
+      ),
   );
 });

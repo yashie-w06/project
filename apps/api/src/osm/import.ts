@@ -116,29 +116,15 @@ class ClientOsmImportStore implements OsmImportStore {
          source_node_ids=EXCLUDED.source_node_ids,
          coordinates=EXCLUDED.coordinates,
          tags=EXCLUDED.tags,
-         provisional_eligible=CASE
-           WHEN osm_candidates.reviewer_decision IN ('rejected','needs_edit') THEN false
-           ELSE EXCLUDED.provisional_eligible
-         END,
-         provisional_exclusion_reason=CASE
-           WHEN osm_candidates.reviewer_decision='rejected' THEN 'review_rejected'
-           WHEN osm_candidates.reviewer_decision='needs_edit' THEN 'review_needs_edit'
-           ELSE EXCLUDED.provisional_exclusion_reason
-         END,
+         provisional_eligible=EXCLUDED.provisional_eligible,
+         provisional_exclusion_reason=EXCLUDED.provisional_exclusion_reason,
          version=osm_candidates.version+1,
          updated_at=now()
        WHERE osm_candidates.source_node_ids IS DISTINCT FROM EXCLUDED.source_node_ids
           OR osm_candidates.coordinates IS DISTINCT FROM EXCLUDED.coordinates
           OR osm_candidates.tags IS DISTINCT FROM EXCLUDED.tags
-          OR osm_candidates.provisional_eligible IS DISTINCT FROM
-             CASE WHEN osm_candidates.reviewer_decision IN ('rejected','needs_edit')
-               THEN false ELSE EXCLUDED.provisional_eligible END
-          OR osm_candidates.provisional_exclusion_reason IS DISTINCT FROM
-             CASE
-               WHEN osm_candidates.reviewer_decision='rejected' THEN 'review_rejected'
-               WHEN osm_candidates.reviewer_decision='needs_edit' THEN 'review_needs_edit'
-               ELSE EXCLUDED.provisional_exclusion_reason
-             END`,
+          OR osm_candidates.provisional_eligible IS DISTINCT FROM EXCLUDED.provisional_eligible
+          OR osm_candidates.provisional_exclusion_reason IS DISTINCT FROM EXCLUDED.provisional_exclusion_reason`,
       [
         candidate.id,
         candidate.sourceWayId,

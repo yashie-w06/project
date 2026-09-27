@@ -8,6 +8,7 @@ import {
   type CSSProperties,
 } from "react";
 import {
+  Arc,
   Circle,
   Group,
   Layer,
@@ -22,47 +23,36 @@ import {
   containedRoomTranslation,
   centredConnectorLabel,
   centredRoomLabel,
-  doorLocalPoint,
+  doorDisplayGeometry,
   nearestDoorSnap,
   pointInPolygon,
+  polygonLabelPlacement,
   roomContainedInBoundary,
   squareContainedInBoundary,
 } from "./geometry";
-import { floorToMap, screenToFloorPoint, zoomViewAtPoint } from "./transform";
+import { screenToFloorPoint, zoomViewAtPoint } from "./transform";
 import type {
-  ConnectorPlacement,
-  DoorFeature,
   FloorFeature,
   FloorIssue,
   FloorLayout,
   LocalPoint,
   RoomFeature,
 } from "./types";
-import { isExitEligible, validateFloorLayout } from "./validation";
+import { validateFloorLayout } from "./validation";
 import "./floor-canvas.css";
 
 type Tool =
   "select" | "boundary" | "room" | "door" | "point" | "stairs" | "lift";
 
-export type VerifiedMainNodeOption = {
-  nodeId: string;
-  label: string;
-};
-
 export type FloorCanvasProps = {
   value: FloorLayout;
   onChange: (next: FloorLayout) => void;
-  onSaveDraft: (draft: FloorLayout) => void | Promise<void>;
-  onPublish: (published: FloorLayout) => void | Promise<void>;
-  onReloadDraft?: () =>
-    FloorLayout | undefined | Promise<FloorLayout | undefined>;
-  connectorPlacements?: ConnectorPlacement[];
-  verifiedMainNodes?: VerifiedMainNodeOption[];
+  onSave: (layout: FloorLayout) => void | Promise<void>;
+  buildingName?: string;
   width?: number;
   height?: number;
   disabled?: boolean;
-  /** Opens the outdoor map with this draft exit highlighted for graph linking. */
-  onLinkExit?: (door: DoorFeature) => void;
+  readOnly?: boolean;
 };
 
 type View = { x: number; y: number; scale: number };
@@ -137,15 +127,12 @@ function firstRoomAt(
 export function FloorCanvas({
   value,
   onChange,
-  onSaveDraft,
-  onPublish,
-  onReloadDraft,
-  connectorPlacements = [],
-  verifiedMainNodes = [],
+  onSave,
+  buildingName,
   width,
   height,
   disabled = false,
-  onLinkExit,
+  readOnly = false,
 }: FloorCanvasProps) {
   const initialWidth = width ?? 920;
   const initialHeight = height ?? 620;
@@ -160,7 +147,6 @@ export function FloorCanvas({
   );
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string>();
-  const [preview, setPreview] = useState(false);
   const [view, setView] = useState<View>(() =>
     fitView(value, initialWidth, initialHeight),
   );
@@ -185,10 +171,7 @@ export function FloorCanvas({
     Math.min(height ?? 680, Math.round(canvasWidth * 0.68)),
   );
 
-  const issues = useMemo(
-    () => validateFloorLayout(value, connectorPlacements, false),
-    [connectorPlacements, value],
-  );
+  const issues = useMemo(() => validateFloorLayout(value), [value]);
   const selected = value.features.find((feature) => feature.id === selectedId);
 
   useEffect(() => {
@@ -221,7 +204,7 @@ export function FloorCanvas({
   useEffect(() => {
     const transformer = transformerRef.current;
     const stage = stageRef.current;
-    if (!transformer || !stage || !selectedId || preview) {
+    if (!transformer || !stage || !selectedId || readOnly) {
       transformer?.nodes([]);
       return;
     }
@@ -229,7 +212,7 @@ export function FloorCanvas({
     const feature = value.features.find((item) => item.id === selectedId);
     transformer.nodes(node && feature?.kind === "room" ? [node] : []);
     transformer.getLayer()?.batchDraw();
-  }, [preview, selectedId, value.features]);
+  }, [readOnly, selectedId, value.features]);
 
   const commit = useCallback(
     (next: FloorLayout, record = true) => {
@@ -251,7 +234,8 @@ export function FloorCanvas({
   };
 
   const addAt = (point: LocalPoint) => {
-    if (disabled || preview || tool === "select" || tool === "boundary") return;
+    if (disabled || readOnly || tool === "select" || tool === "boundary")
+      return;
     let feature: FloorFeature | undefined;
     if (tool === "room") {
       feature = firstRoomAt(
@@ -279,6 +263,12 @@ export function FloorCanvas({
     } else if (tool === "point" && pointInPolygon(point, value.boundary)) {
       feature = { id: uid("point"), kind: "point", name: "Point", ...point };
     } else if (tool === "stairs" || tool === "lift") {
+      if (value.floor !== 0) {
+        setNotice(
+          "Stairs and lift markers can only be added on the ground floor.",
+        );
+        return;
+      }
       const size = Math.max(
         5,
         Math.min(value.localWidth, value.localHeight) * 0.065,
@@ -291,7 +281,7 @@ export function FloorCanvas({
           ...point,
           size,
           connectorId: "",
-          servedFloors: [value.floor],
+          servedFloors: [],
         };
       }
     }
@@ -365,55 +355,14 @@ export function FloorCanvas({
     setView(next);
   };
 
-  const saveDraft = async () => {
+  const save = async () => {
     setBusy(true);
     try {
-      await onSaveDraft({ ...value, status: "draft" });
-      setNotice("Draft saved.");
+      await onSave(value);
+      setNotice("Saved.");
     } catch (error) {
       setNotice(
-        error instanceof Error ? error.message : "Draft could not be saved.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const publish = async () => {
-    const publishIssues = validateFloorLayout(value, connectorPlacements, true);
-    const errors = publishIssues.filter((issue) => issue.severity === "error");
-    if (errors.length) {
-      setNotice(errors.map((issue) => issue.message).join(" "));
-      return;
-    }
-    setBusy(true);
-    try {
-      await onPublish({ ...value, status: "published" });
-      setNotice("Floor published.");
-    } catch (error) {
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Floor could not be published.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const reloadDraft = async () => {
-    if (!onReloadDraft) return;
-    setBusy(true);
-    try {
-      const draft = await onReloadDraft();
-      if (draft) {
-        historyRef.current.push(value);
-        onChange(draft);
-        setNotice("Saved draft reloaded.");
-      } else setNotice("No saved draft is available.");
-    } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "Draft could not be reloaded.",
+        error instanceof Error ? error.message : "Floor could not be saved.",
       );
     } finally {
       setBusy(false);
@@ -422,10 +371,16 @@ export function FloorCanvas({
 
   return (
     <section
-      className="floor-editor"
-      aria-label={`Floor ${value.floor} editor`}
+      className={`floor-editor${readOnly ? " floor-editor--readonly" : ""}`}
+      aria-label={`${buildingName ? `${buildingName}, ` : ""}${value.floor === 0 ? "Ground floor" : `Floor ${value.floor}`} ${readOnly ? "viewer" : "editor"}`}
     >
-      {!preview && (
+      {!readOnly && (
+        <h3 className="floor-editor__heading">
+          {buildingName ? `${buildingName} · ` : ""}
+          {value.floor === 0 ? "Ground floor" : `Floor ${value.floor}`}
+        </h3>
+      )}
+      {!readOnly && (
         <div className="floor-editor__toolbar" aria-label="Floor drawing tools">
           {(
             [
@@ -434,8 +389,7 @@ export function FloorCanvas({
               "room",
               "door",
               "point",
-              "stairs",
-              "lift",
+              ...(value.floor === 0 ? (["stairs", "lift"] as const) : []),
             ] as const
           ).map((item) => (
             <button
@@ -461,31 +415,8 @@ export function FloorCanvas({
           >
             Undo
           </button>
-          {onReloadDraft && (
-            <button
-              type="button"
-              onClick={reloadDraft}
-              disabled={busy || disabled}
-            >
-              Reload draft
-            </button>
-          )}
-          <button type="button" onClick={saveDraft} disabled={busy || disabled}>
-            Save draft
-          </button>
-          <button type="button" onClick={publish} disabled={busy || disabled}>
-            Publish
-          </button>
-          <button type="button" onClick={() => setPreview(true)}>
-            User preview
-          </button>
-        </div>
-      )}
-      {preview && (
-        <div className="floor-editor__preview-banner">
-          User-view preview: editing handles and draft-only controls are hidden.
-          <button type="button" onClick={() => setPreview(false)}>
-            Exit preview
+          <button type="button" onClick={save} disabled={busy || disabled}>
+            {busy ? "Saving…" : "Save"}
           </button>
         </div>
       )}
@@ -504,7 +435,7 @@ export function FloorCanvas({
               y={view.y}
               scaleX={view.scale}
               scaleY={view.scale}
-              draggable={!disabled && tool === "select"}
+              draggable={readOnly || (!disabled && tool === "select")}
               onWheel={handleWheel}
               onTouchMove={handleTouchMove}
               onTouchEnd={() => {
@@ -526,21 +457,25 @@ export function FloorCanvas({
               }}
               onMouseDown={(event) => {
                 const stage = event.target.getStage();
-                if (stage && event.target === stage && tool === "select")
+                if (
+                  stage &&
+                  event.target === stage &&
+                  (readOnly || tool === "select")
+                )
                   setSelectedId(undefined);
               }}
               onClick={(event) => {
                 const stage = event.target.getStage();
                 if (!stage || event.target !== stage) return;
                 const point = stagePoint(stage);
-                if (point) addAt(point);
+                if (!readOnly && point) addAt(point);
               }}
               onTap={(event) => {
                 const stage = event.target.getStage();
                 if (!stage || event.target !== stage) return;
-                if (tool === "select") setSelectedId(undefined);
+                if (!readOnly && tool === "select") setSelectedId(undefined);
                 const point = stagePoint(stage);
-                if (point) addAt(point);
+                if (!readOnly && point) addAt(point);
               }}
             >
               <Layer>
@@ -552,8 +487,28 @@ export function FloorCanvas({
                   strokeWidth={2 / view.scale}
                   listening={false}
                 />
+                {buildingName &&
+                  (() => {
+                    const label = polygonLabelPlacement(
+                      value.boundary,
+                      view.scale,
+                    );
+                    return label ? (
+                      <Text
+                        {...label}
+                        text={buildingName}
+                        align="center"
+                        verticalAlign="middle"
+                        wrap="word"
+                        ellipsis
+                        fill="#64748b"
+                        opacity={0.38}
+                        listening={false}
+                      />
+                    ) : null;
+                  })()}
                 {tool === "boundary" &&
-                  !preview &&
+                  !readOnly &&
                   value.boundary.map((point, index) => (
                     <Circle
                       key={`boundary-${index}`}
@@ -591,14 +546,14 @@ export function FloorCanvas({
                     feature={feature}
                     layout={value}
                     selected={feature.id === selectedId}
-                    preview={preview}
+                    preview={readOnly}
                     viewScale={view.scale}
                     onSelect={() => setSelectedId(feature.id)}
                     onChange={updateFeature}
                     onInvalid={setNotice}
                   />
                 ))}
-                {!preview && (
+                {!readOnly && (
                   <Transformer
                     ref={transformerRef}
                     rotateEnabled={false}
@@ -637,23 +592,12 @@ export function FloorCanvas({
           </div>
         </div>
 
-        {!preview && selected && (
+        {!readOnly && selected && (
           <FeatureInspector
             feature={selected}
             floor={value.floor}
-            verifiedMainNodes={verifiedMainNodes}
             issues={issues.filter((issue) => issue.featureId === selected.id)}
-            onLinkExit={onLinkExit}
             onChange={(feature) => {
-              if (feature.kind === "door" && feature.isExit) {
-                const point = doorLocalPoint(feature, value);
-                feature = point
-                  ? {
-                      ...feature,
-                      outdoorPosition: floorToMap(point, value.transform),
-                    }
-                  : feature;
-              }
               updateFeature(feature);
             }}
             onDelete={() => {
@@ -667,7 +611,7 @@ export function FloorCanvas({
             }}
           />
         )}
-        {!preview && !selected && (
+        {!readOnly && !selected && (
           <aside className="floor-editor__empty-inspector">
             <strong>Component inspector</strong>
             <p>Select a room, door, special dot, stairs, or lift to edit it.</p>
@@ -676,7 +620,16 @@ export function FloorCanvas({
         )}
       </div>
 
-      {!preview && (
+      {readOnly && selected && (
+        <aside className="floor-editor__viewer-popup" aria-live="polite">
+          <strong>{selected.name}</strong>
+          <span>
+            {selected.kind === "point" ? "Special dot" : selected.kind}
+          </span>
+        </aside>
+      )}
+
+      {!readOnly && (
         <IssueList
           issues={issues}
           notice={notice}
@@ -723,9 +676,12 @@ function FloorFeatureShape(props: ShapeProps) {
     onMouseEnter: () => setHovered(true),
     onMouseLeave: () => setHovered(false),
   };
+  const legacyUpperConnector =
+    layout.floor !== 0 &&
+    (feature.kind === "stairs" || feature.kind === "lift");
 
   if (feature.kind === "room") {
-    const label = centredRoomLabel(feature);
+    const label = centredRoomLabel(feature, viewScale);
     return (
       <Group
         {...common}
@@ -790,13 +746,15 @@ function FloorFeatureShape(props: ShapeProps) {
   }
 
   if (feature.kind === "door") {
-    const point = doorLocalPoint(feature, layout);
-    if (!point) return null;
+    const display = doorDisplayGeometry(feature, layout);
+    if (!display) return null;
+    const { point, rotation, leafLength: doorLength } = display;
     return (
       <Group
         {...common}
         x={point.x}
         y={point.y}
+        rotation={rotation}
         draggable={!preview}
         onDragEnd={(event) => {
           const snap = nearestDoorSnap(
@@ -828,28 +786,36 @@ function FloorFeatureShape(props: ShapeProps) {
           });
         }}
       >
-        <Circle
-          radius={4}
-          fill={feature.isExit ? "#16a34a" : "#f97316"}
-          stroke={selected && !preview ? "#0f172a" : "white"}
-          strokeWidth={1.2 / viewScale}
+        <Circle radius={10 / viewScale} fill="transparent" />
+        <Line
+          points={[-doorLength / 2, 0, doorLength / 2, 0]}
+          stroke="#334155"
+          strokeWidth={2 / viewScale}
+          listening={false}
         />
-        {feature.isExit && (
-          <Text
-            x={5}
-            y={-4}
-            text="EXIT"
-            fontSize={4}
-            fill="#166534"
-            listening={false}
-          />
-        )}
-        {(selected || hovered) && (
-          <CompactNameBadge
-            name={feature.name}
-            offsetY={feature.isExit ? 7 : 0}
-          />
-        )}
+        <Line
+          points={[0, 0, 0, -doorLength]}
+          stroke="#c2410c"
+          strokeWidth={2.2 / viewScale}
+          listening={false}
+        />
+        <Arc
+          x={0}
+          y={0}
+          innerRadius={doorLength - 0.7 / viewScale}
+          outerRadius={doorLength}
+          angle={90}
+          rotation={-90}
+          fill="#c2410c"
+          listening={false}
+        />
+        <CompactNameBadge
+          name={feature.name}
+          offsetY={-(doorLength + 24 / viewScale)}
+          viewScale={viewScale}
+          active={selected || hovered}
+          rotation={-rotation}
+        />
       </Group>
     );
   }
@@ -857,14 +823,14 @@ function FloorFeatureShape(props: ShapeProps) {
   const size = feature.kind === "point" ? 0 : feature.size;
   const connectorLabel =
     feature.kind === "stairs" || feature.kind === "lift"
-      ? centredConnectorLabel(feature, size)
+      ? centredConnectorLabel(feature, size, viewScale)
       : undefined;
   return (
     <Group
       {...common}
       x={feature.x}
       y={feature.y}
-      draggable={!preview}
+      draggable={!preview && !legacyUpperConnector}
       onDragEnd={(event) => {
         const point = { x: event.target.x(), y: event.target.y() };
         const valid =
@@ -916,8 +882,13 @@ function FloorFeatureShape(props: ShapeProps) {
           listening={false}
         />
       )}
-      {feature.kind === "point" && (selected || hovered) && (
-        <CompactNameBadge name={feature.name} />
+      {feature.kind === "point" && (
+        <CompactNameBadge
+          name={feature.name}
+          offsetY={-24 / viewScale}
+          viewScale={viewScale}
+          active={selected || hovered}
+        />
       )}
     </Group>
   );
@@ -926,27 +897,34 @@ function FloorFeatureShape(props: ShapeProps) {
 function CompactNameBadge({
   name,
   offsetY = 0,
+  viewScale = 1,
+  active = false,
+  rotation = 0,
 }: {
   name: string;
   offsetY?: number;
+  viewScale?: number;
+  active?: boolean;
+  rotation?: number;
 }) {
-  const width = Math.min(48, Math.max(18, name.length * 2.8));
+  const width = Math.min(180, Math.max(48, name.length * 7.2)) / viewScale;
+  const height = 22 / viewScale;
   return (
-    <Group x={-width / 2} y={-16 + offsetY} listening={false}>
+    <Group x={-width / 2} y={offsetY} rotation={rotation} listening={false}>
       <Rect
         width={width}
-        height={10}
-        cornerRadius={2}
-        fill="rgba(255,255,255,0.94)"
-        stroke="#94a3b8"
-        strokeWidth={0.5}
+        height={height}
+        cornerRadius={4 / viewScale}
+        fill={active ? "#fffbeb" : "rgba(255,255,255,0.96)"}
+        stroke={active ? "#d97706" : "#94a3b8"}
+        strokeWidth={1 / viewScale}
       />
       <Text
-        x={2}
-        width={width - 4}
-        height={10}
+        x={4 / viewScale}
+        width={width - 8 / viewScale}
+        height={height}
         text={name}
-        fontSize={4}
+        fontSize={12 / viewScale}
         align="center"
         verticalAlign="middle"
         wrap="none"
@@ -960,27 +938,32 @@ function CompactNameBadge({
 function FeatureInspector({
   feature,
   floor,
-  verifiedMainNodes,
   issues,
-  onLinkExit,
   onChange,
   onDelete,
 }: {
   feature: FloorFeature;
   floor: number;
-  verifiedMainNodes: VerifiedMainNodeOption[];
   issues: FloorIssue[];
-  onLinkExit?: (door: DoorFeature) => void;
   onChange: (feature: FloorFeature) => void;
   onDelete: () => void;
 }) {
   const eligibleExit =
-    feature.kind === "door" && isExitEligible(feature, floor);
+    feature.kind === "door" &&
+    floor === 0 &&
+    feature.parent.kind === "exterior";
   return (
     <div className="floor-editor__inspector">
       <strong>
         {feature.kind === "point" ? "Special point" : feature.kind}
       </strong>
+      {floor !== 0 &&
+        (feature.kind === "stairs" || feature.kind === "lift") && (
+          <span className="floor-editor__hint">
+            Legacy annotation. Access availability is based on the saved ground
+            floor.
+          </span>
+        )}
       <label>
         Name
         <input
@@ -990,37 +973,6 @@ function FeatureInspector({
           }
         />
       </label>
-      {(feature.kind === "stairs" || feature.kind === "lift") && (
-        <>
-          <label>
-            Connector ID
-            <input
-              value={feature.connectorId}
-              onChange={(event) =>
-                onChange({ ...feature, connectorId: event.target.value })
-              }
-              placeholder="e.g. north-core"
-            />
-          </label>
-          <label>
-            Served floors (comma separated)
-            <input
-              value={feature.servedFloors.join(", ")}
-              onChange={(event) => {
-                const floors = [
-                  ...new Set(
-                    event.target.value
-                      .split(",")
-                      .map(Number)
-                      .filter(Number.isInteger),
-                  ),
-                ];
-                onChange({ ...feature, servedFloors: floors });
-              }}
-            />
-          </label>
-        </>
-      )}
       {feature.kind === "door" && eligibleExit && (
         <>
           <label className="floor-editor__check">
@@ -1028,61 +980,12 @@ function FeatureInspector({
               type="checkbox"
               checked={feature.isExit}
               onChange={(event) =>
-                onChange({
-                  ...feature,
-                  isExit: event.target.checked,
-                  outdoorPosition: event.target.checked
-                    ? feature.outdoorPosition
-                    : undefined,
-                  linkedGraphNodeId: event.target.checked
-                    ? feature.linkedGraphNodeId
-                    : undefined,
-                  mainPathVerified: event.target.checked
-                    ? feature.mainPathVerified
-                    : undefined,
-                })
+                onChange({ ...feature, isExit: event.target.checked })
               }
             />
-            Mark as exit
+            Label as exit (optional)
           </label>
-          {feature.isExit && (
-            <>
-              <button
-                type="button"
-                onClick={() => onLinkExit?.(feature)}
-                disabled={!onLinkExit}
-              >
-                Link exit on outdoor map
-              </button>
-              <label>
-                Verified main-path connection
-                <select
-                  value={feature.linkedGraphNodeId ?? ""}
-                  onChange={(event) =>
-                    onChange({
-                      ...feature,
-                      linkedGraphNodeId: event.target.value || undefined,
-                      mainPathVerified: Boolean(event.target.value),
-                    })
-                  }
-                >
-                  <option value="">Select a verified node</option>
-                  {verifiedMainNodes.map((node) => (
-                    <option key={node.nodeId} value={node.nodeId}>
-                      {node.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
         </>
-      )}
-      {feature.kind === "door" && !eligibleExit && (
-        <span className="floor-editor__hint">
-          Only a ground-floor door attached to the exterior boundary can be an
-          exit.
-        </span>
       )}
       <button type="button" className="floor-editor__delete" onClick={onDelete}>
         Delete
@@ -1092,9 +995,7 @@ function FeatureInspector({
           type="button"
           className="floor-editor__feature-warning"
           key={`${issue.code}-${issue.message}`}
-          onClick={() =>
-            feature.kind === "door" && feature.isExit && onLinkExit?.(feature)
-          }
+          onClick={() => undefined}
         >
           {issue.severity === "error" ? "Error" : "Needs attention"}:{" "}
           {issue.message}

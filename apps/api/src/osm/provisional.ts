@@ -4,7 +4,6 @@ import type {
   LonLat,
   OsmBuildingCandidate,
   OsmPathCandidate,
-  OsmReviewDecision,
   OsmTags,
 } from "./types.js";
 
@@ -24,6 +23,13 @@ export interface ProvisionalOsmGraph {
     sourceWayId: string;
     reason: OsmExclusionReason;
   }[];
+}
+
+export interface OsmPathJunction {
+  readonly sourceWayId: string;
+  readonly segmentIndex: number;
+  readonly segmentFraction: number;
+  readonly node: RouteNode;
 }
 
 const WALKABLE_HIGHWAYS = new Set([
@@ -186,7 +192,7 @@ export function polylineCrossesBuildingInterior(
 export function buildProvisionalOsmGraph(input: {
   readonly candidates: readonly OsmPathCandidate[];
   readonly buildings?: readonly OsmBuildingCandidate[];
-  readonly decisions?: ReadonlyMap<string, OsmReviewDecision | null>;
+  readonly junctions?: readonly OsmPathJunction[];
 }): ProvisionalOsmGraph {
   const excluded: { sourceWayId: string; reason: OsmExclusionReason }[] = [];
   const eligible: {
@@ -196,16 +202,6 @@ export function buildProvisionalOsmGraph(input: {
   for (const candidate of [...input.candidates].sort((a, b) =>
     a.sourceWayId.localeCompare(b.sourceWayId, "en", { numeric: true }),
   )) {
-    const decision =
-      input.decisions?.get(candidate.sourceWayId) ?? candidate.reviewerDecision;
-    if (decision === "rejected" || decision === "needs_edit") {
-      excluded.push({
-        sourceWayId: candidate.sourceWayId,
-        reason:
-          decision === "rejected" ? "review_rejected" : "review_needs_edit",
-      });
-      continue;
-    }
     const classification = osmWalkingEligibility(candidate.tags);
     if (!classification.eligible) {
       excluded.push({
@@ -242,20 +238,69 @@ export function buildProvisionalOsmGraph(input: {
   }
 
   const nodeReferenceCount = new Map<string, number>();
+  const junctionsByWay = new Map<string, OsmPathJunction[]>();
+  for (const junction of input.junctions ?? []) {
+    const entries = junctionsByWay.get(junction.sourceWayId) ?? [];
+    entries.push(junction);
+    junctionsByWay.set(junction.sourceWayId, entries);
+  }
+  const augmented = new Map<string, { ids: string[]; coordinates: LonLat[] }>();
   for (const { candidate } of eligible) {
-    for (const nodeId of candidate.orderedNodeIds)
+    const ids: string[] = [];
+    const coordinates: LonLat[] = [];
+    const wayCuts = junctionsByWay.get(candidate.sourceWayId) ?? [];
+    const vertexCuts = new Map<number, OsmPathJunction>();
+    for (const cut of wayCuts) {
+      const vertex =
+        cut.segmentFraction <= 1e-9
+          ? cut.segmentIndex
+          : cut.segmentFraction >= 1 - 1e-9
+            ? cut.segmentIndex + 1
+            : -1;
+      if (vertex >= 0) vertexCuts.set(vertex, cut);
+    }
+    for (let index = 0; index < candidate.orderedNodeIds.length - 1; index++) {
+      const vertexCut = vertexCuts.get(index);
+      ids.push(vertexCut?.node.id ?? candidate.orderedNodeIds[index]!);
+      coordinates.push(
+        vertexCut?.node.coordinates ?? candidate.coordinates[index]!,
+      );
+      const cuts = wayCuts
+        .filter((entry) => entry.segmentIndex === index)
+        .sort((a, b) => a.segmentFraction - b.segmentFraction);
+      for (const cut of cuts) {
+        if (cut.segmentFraction <= 1e-9 || cut.segmentFraction >= 1 - 1e-9)
+          continue;
+        ids.push(cut.node.id);
+        coordinates.push(cut.node.coordinates);
+      }
+    }
+    const finalCut = vertexCuts.get(candidate.orderedNodeIds.length - 1);
+    ids.push(finalCut?.node.id ?? candidate.orderedNodeIds.at(-1)!);
+    coordinates.push(
+      finalCut?.node.coordinates ?? candidate.coordinates.at(-1)!,
+    );
+    augmented.set(candidate.sourceWayId, { ids, coordinates });
+  }
+  const explicitJunctionIds = new Set(
+    (input.junctions ?? []).map((junction) => junction.node.id),
+  );
+  for (const { candidate } of eligible) {
+    for (const nodeId of augmented.get(candidate.sourceWayId)!.ids)
       nodeReferenceCount.set(nodeId, (nodeReferenceCount.get(nodeId) ?? 0) + 1);
   }
   const nodes = new Map<string, RouteNode>();
   const edges: RouteEdge[] = [];
   for (const { candidate, wheelchairEligible } of eligible) {
-    const last = candidate.orderedNodeIds.length - 1;
-    const breakIndexes = candidate.orderedNodeIds
+    const augmentedWay = augmented.get(candidate.sourceWayId)!;
+    const last = augmentedWay.ids.length - 1;
+    const breakIndexes = augmentedWay.ids
       .map((nodeId, index) => ({ nodeId, index }))
       .filter(
         ({ nodeId, index }) =>
           index === 0 ||
           index === last ||
+          explicitJunctionIds.has(nodeId) ||
           (nodeReferenceCount.get(nodeId) ?? 0) > 1,
       )
       .map(({ index }) => index);
@@ -263,25 +308,30 @@ export function buildProvisionalOsmGraph(input: {
       const fromIndex = breakIndexes[part]!;
       const toIndex = breakIndexes[part + 1]!;
       if (toIndex <= fromIndex) continue;
-      const fromOsmId = candidate.orderedNodeIds[fromIndex]!;
-      const toOsmId = candidate.orderedNodeIds[toIndex]!;
-      const fromNodeId = `osm-node:${fromOsmId}`;
-      const toNodeId = `osm-node:${toOsmId}`;
+      const fromOsmId = augmentedWay.ids[fromIndex]!;
+      const toOsmId = augmentedWay.ids[toIndex]!;
+      const fromNodeId = explicitJunctionIds.has(fromOsmId)
+        ? fromOsmId
+        : `osm-node:${fromOsmId}`;
+      const toNodeId = explicitJunctionIds.has(toOsmId)
+        ? toOsmId
+        : `osm-node:${toOsmId}`;
       nodes.set(fromNodeId, {
         id: fromNodeId,
-        coordinates: candidate.coordinates[fromIndex]!,
+        coordinates: augmentedWay.coordinates[fromIndex]!,
       });
       nodes.set(toNodeId, {
         id: toNodeId,
-        coordinates: candidate.coordinates[toIndex]!,
+        coordinates: augmentedWay.coordinates[toIndex]!,
       });
       edges.push(
         Object.freeze({
           id: `osm-edge:${candidate.sourceWayId}:${fromIndex}-${toIndex}`,
+          parentFeatureId: `osm-${candidate.sourceWayId}`,
           fromNodeId,
           toNodeId,
           coordinates: Object.freeze(
-            candidate.coordinates.slice(fromIndex, toIndex + 1),
+            augmentedWay.coordinates.slice(fromIndex, toIndex + 1),
           ),
           kind: "main",
           verified: false,
@@ -290,6 +340,9 @@ export function buildProvisionalOsmGraph(input: {
           sourceOsmId: candidate.sourceWayId,
           osmHighway: candidate.tags.highway ?? null,
           wheelchairEligible,
+          blocked: candidate.blocked ?? false,
+          note: candidate.note ?? null,
+          version: candidate.version,
           oneWay: candidate.tags["oneway:foot"] === "yes",
         }),
       );

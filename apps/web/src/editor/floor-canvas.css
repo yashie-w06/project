@@ -8,6 +8,34 @@
     sans-serif;
 }
 
+.floor-editor--readonly .floor-editor__workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.floor-editor__heading {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1rem;
+}
+
+.floor-editor__viewer-popup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  border: 1px solid #fbbf24;
+  border-radius: 0.5rem;
+  background: #fffbeb;
+  color: #713f12;
+  padding: 0.55rem 0.75rem;
+}
+
+.floor-editor__viewer-popup span {
+  color: #854d0e;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
 .floor-editor__workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);

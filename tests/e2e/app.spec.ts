@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const emptyCollection = { type: "FeatureCollection", features: [] };
 const building = {
   type: "Feature",
   properties: { id: "test-building", name: "Test Building" },
@@ -19,10 +18,32 @@ const building = {
 };
 const map = {
   buildings: { type: "FeatureCollection", features: [building] },
-  referencePaths: emptyCollection,
-  provisionalPaths: emptyCollection,
-  verifiedPaths: emptyCollection,
-  points: emptyCollection,
+  paths: {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: "path-1",
+        properties: {
+          id: "path-1",
+          name: "Library Walk",
+          kind: "main",
+          blocked: false,
+          note: "Shaded path",
+          source: "osm",
+          version: 1,
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [75.871, 22.726],
+            [75.872, 22.726],
+          ],
+        },
+      },
+    ],
+  },
+  points: { type: "FeatureCollection", features: [] },
   alerts: [],
 };
 
@@ -45,9 +66,47 @@ async function mockApi(page: Page) {
     else if (url.pathname === "/api/editor/login")
       body = { token: "test-token", expiresInSeconds: 7200 };
     else if (url.pathname === "/api/editor/graph")
-      body = { nodes: [], edges: [], candidates: [], points: [], alerts: [] };
+      body = { paths: [], points: [], alerts: [] };
     else if (url.pathname === "/api/editor/messages") body = { messages: [] };
     else if (url.pathname === "/api/editor/floors") body = { floors: [] };
+    else if (url.pathname.startsWith("/api/editor/floors/"))
+      body = { version: 2 };
+    else if (url.pathname.startsWith("/api/editor/paths"))
+      body = { id: "fixture-shortcut", version: 1 };
+    else if (url.pathname.startsWith("/api/editor/points"))
+      body = { id: "fixture-point", version: 1 };
+    else if (url.pathname === "/api/editor/alerts")
+      body = { id: "fixture-alert" };
+    else if (url.pathname === "/api/buildings/test-building")
+      body = {
+        floors: [{ id: "test-building:0", floor_number: 0, version: 1 }],
+      };
+    else if (url.pathname === "/api/buildings/test-building/floors/0")
+      body = {
+        id: "test-building:0",
+        buildingId: "test-building",
+        floorNumber: 0,
+        version: 1,
+        boundary: {
+          coordinates: [
+            [
+              [0, 0],
+              [1000, 0],
+              [1000, 700],
+              [0, 700],
+              [0, 0],
+            ],
+          ],
+        },
+        localWidth: 1000,
+        localHeight: 700,
+        mapTransform: {
+          origin: [75.871, 22.726],
+          xAxis: [0.000001, 0],
+          yAxis: [0, -0.000001],
+        },
+        features: [],
+      };
     else if (url.pathname === "/api/route")
       body = {
         status: "ok",
@@ -67,16 +126,13 @@ async function mockApi(page: Page) {
                 [75.8718, 22.7268],
               ],
             },
-            source: "osm",
-            confidence: "provisional",
-            sourceId: "fixture-way",
+            pathId: "path-1",
+            kind: "main",
+            note: "Shaded path",
           },
         ],
         approaches: [],
-        containsProvisional: true,
-        notices: [
-          "Suggested route based on map data; paths and accessibility have not been field-verified.",
-        ],
+        notices: ["Building approach."],
       };
     else if (url.pathname === "/api/search")
       body = {
@@ -101,7 +157,7 @@ async function mockApi(page: Page) {
   });
 }
 
-test("public wizard confirms stable results and labels a provisional route", async ({
+test("public routing draws a mapped route and shows its path note", async ({
   page,
 }, testInfo) => {
   await mockApi(page);
@@ -109,17 +165,19 @@ test("public wizard confirms stable results and labels a provisional route", asy
   await expect(
     page.getByRole("heading", { name: "Campus Access" }),
   ).toBeVisible();
-  const search = page.getByLabel("Search mapped places");
-  await search.fill("Test");
-  await page.getByRole("button", { name: /Test Building/ }).click();
-  await page.getByRole("button", { name: /Confirm start/i }).click();
-  await search.fill("Test");
-  await page.getByRole("button", { name: /Test Building/ }).click();
-  await page.getByRole("button", { name: /Confirm destination/i }).click();
+  await page.getByRole("tab", { name: "Routing" }).click();
+  const start = page.getByLabel("Start");
+  await start.fill("Test");
+  await page.getByRole("button", { name: "Test Building" }).click();
+  await page.getByRole("button", { name: "Use as start" }).click();
+  await page.getByLabel("Destination").fill("Test");
+  await page.getByRole("button", { name: "Test Building" }).click();
+  await page.getByRole("button", { name: "Use as destination" }).click();
   await page.getByRole("button", { name: /^Find route$/i }).click();
-  await expect(page.getByText(/not been field-verified/i)).toBeVisible();
+  await expect(page.getByText("Shaded path")).toBeVisible();
+  await expect(page.getByText("Building approach.")).toBeVisible();
   await page.screenshot({
-    path: `test-results/${testInfo.project.name}-public-provisional-route.png`,
+    path: `test-results/${testInfo.project.name}-public-route.png`,
     fullPage: true,
   });
 });

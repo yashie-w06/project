@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Feature, FeatureCollection, LineString, Point } from "geojson";
 import { api } from "../api";
 import { CampusMap } from "../map/CampusMap";
+import { FloorViewer } from "../editor/FloorViewer";
+import type { FloorLayout } from "../editor/types";
 import type {
   CampusMapData,
   Coordinate,
   RouteEndpoint,
+  RouteResponse,
   TravelProfile,
 } from "../types";
 import "./public-map.css";
 
-type Step = "start" | "destination" | "profile";
+type PublicMode = "view" | "routing" | "send-note";
+type EndpointKind = "start" | "destination";
 type SearchResult = {
   kind: string;
   id: string;
@@ -18,14 +22,53 @@ type SearchResult = {
   longitude?: number;
   latitude?: number;
   buildingId?: string;
-  floor?: number;
 };
 type Choice = {
   label: string;
-  context: string;
   endpoint: RouteEndpoint;
   buildingId?: string;
   coordinate?: Coordinate;
+};
+type PublicPath = {
+  id: string;
+  name?: string;
+  kind: "main" | "shortcut";
+  blocked: boolean;
+  note?: string | null;
+  source?: "osm" | "editor";
+};
+type MapData = CampusMapData & {
+  paths?: FeatureCollection<LineString, PublicPath>;
+  points: FeatureCollection<
+    Point,
+    { id: string; name?: string; note?: string }
+  >;
+  alerts: Array<{ id: string; coordinates: Coordinate; description: string }>;
+};
+type SavedFloorSummary = { id: string; floor_number: number; version?: number };
+type SavedFloorDetails = {
+  id?: string;
+  building_id?: string;
+  floor_number?: number;
+  boundary: { coordinates?: number[][][] } | number[][][];
+  local_width?: number;
+  localWidth?: number;
+  local_height?: number;
+  localHeight?: number;
+  map_transform?: FloorLayout["transform"];
+  mapTransform?: FloorLayout["transform"];
+  version?: number;
+  features: Array<{
+    id: string;
+    kind: "room" | "door" | "point" | "stairs" | "lift";
+    name: string;
+    geometry: Record<string, unknown>;
+    connector_id?: string;
+    served_floors?: number[];
+    is_exit?: boolean;
+    outdoor_position?: Coordinate;
+    linked_graph_node_id?: string;
+  }>;
 };
 
 const profileLabels: Record<TravelProfile, string> = {
@@ -33,66 +76,58 @@ const profileLabels: Record<TravelProfile, string> = {
   wheelchair: "Wheelchair",
   heavy_luggage: "Heavy luggage",
 };
-const reasonText: Record<string, string> = {
+const noRouteMessages: Record<string, string> = {
   NO_WALKABLE_GRAPH: "No mapped walking paths are available in this area yet.",
   NO_VERIFIED_PATHS: "No mapped walking paths are available in this area yet.",
   START_UNREACHABLE:
-    "No mapped walking path can be reached from this start; adjust the point or exit side.",
+    "No mapped walking path can be reached from this start. Try another point.",
   DEST_UNREACHABLE:
-    "No mapped walking path reaches this destination; adjust the point or entrance side.",
+    "No mapped walking path reaches this destination. Try another point.",
   NO_PLAUSIBLE_APPROACH:
-    "Choose an entrance/exit side on the building boundary to continue.",
-  NO_LINKED_EXIT:
-    "Choose an entrance/exit side on the building boundary to continue.",
-  NO_LINKED_ENTRANCE:
-    "Choose an entrance/exit side on the building boundary to continue.",
+    "No nearby mapped walking path reaches an approach to this building.",
   DIFFERENT_COMPONENTS:
-    "The mapped walking paths do not connect these points yet.",
+    "The mapped walking paths do not connect these locations yet.",
   BLOCKED_OR_INELIGIBLE: "No available route for this profile right now.",
 };
-
-type RouteSegment = {
-  geometry?: LineString;
-  coordinates?: Coordinate[];
-  status?: string;
-  confidence?: string;
-  source?: string;
-};
-type RouteApproach = {
-  coordinates?: Coordinate;
-  coordinate?: Coordinate;
-  boundary?: Coordinate;
-  role?: string;
-  approximate?: boolean;
-  label?: string;
-};
+const maximumNoteLength = 500;
 
 export function routePresentation(response: unknown) {
   const value = response as {
-    segments?: RouteSegment[];
-    approaches?: RouteApproach[];
-    approachPoints?: RouteApproach[];
-    selectedApproaches?: Record<string, RouteApproach | undefined>;
+    segments?: Array<{
+      geometry?: LineString;
+      coordinates?: Coordinate[];
+      source?: string;
+      sourceId?: string;
+      pathId?: string;
+      note?: string | null;
+    }>;
+    approaches?: Array<{ boundary?: Coordinate; role?: string }>;
   };
   const segments: FeatureCollection<
     LineString,
-    { confidence?: string; status?: string; source?: string }
+    {
+      source?: string;
+      sourceId?: string;
+      pathId?: string;
+      note?: string | null;
+    }
   > = {
     type: "FeatureCollection",
     features: (value.segments ?? []).flatMap((segment) => {
       const geometry =
         segment.geometry ??
         (segment.coordinates
-          ? ({ type: "LineString", coordinates: segment.coordinates } as const)
+          ? { type: "LineString" as const, coordinates: segment.coordinates }
           : undefined);
       return geometry
         ? [
             {
               type: "Feature" as const,
               properties: {
-                confidence: segment.confidence,
-                status: segment.status,
                 source: segment.source,
+                sourceId: segment.sourceId,
+                pathId: segment.pathId,
+                note: segment.note,
               },
               geometry,
             },
@@ -100,96 +135,229 @@ export function routePresentation(response: unknown) {
         : [];
     }),
   };
-  const rawApproaches = [
-    ...(value.approaches ?? value.approachPoints ?? []),
-    ...Object.entries(value.selectedApproaches ?? {}).flatMap(([role, item]) =>
-      item ? [{ ...item, role: item.role ?? role }] : [],
-    ),
-  ];
-  const approaches: FeatureCollection<
-    Point,
-    { role?: string; approximate?: boolean; label?: string }
-  > = {
+  const approaches: FeatureCollection<Point, { role?: string }> = {
     type: "FeatureCollection",
-    features: rawApproaches.flatMap((approach) => {
-      const coordinates =
-        approach.coordinates ?? approach.coordinate ?? approach.boundary;
-      return coordinates
+    features: (value.approaches ?? []).flatMap((item) =>
+      item.boundary
         ? [
             {
               type: "Feature" as const,
-              properties: {
-                role: approach.role,
-                approximate: approach.approximate,
-                label: approach.label,
-              },
-              geometry: { type: "Point" as const, coordinates },
+              properties: { role: item.role },
+              geometry: { type: "Point" as const, coordinates: item.boundary },
             },
           ]
-        : [];
-    }),
+        : [],
+    ),
   };
   return { segments, approaches };
 }
 
-export function visitorReason(reason: string) {
-  const exact = reasonText[reason];
-  if (exact) return exact;
-  if (/not been verified|no verified paths/i.test(reason))
-    return (
-      reasonText.NO_VERIFIED_PATHS ?? "No mapped walking paths are available."
-    );
-  if (/cannot both connect|not within/i.test(reason))
-    return "One or both selected locations cannot reach a mapped walking path; adjust the point or building side.";
-  if (/disconnected/i.test(reason))
-    return (
-      reasonText.DIFFERENT_COMPONENTS ??
-      "The mapped walking paths do not connect these points yet."
-    );
-  return reason || "No available route for these locations right now.";
+export function visitorReason(code: string) {
+  return (
+    noRouteMessages[code] ??
+    (code || "No available route for these locations right now.")
+  );
 }
 
 export function PublicMap() {
-  const [mapData, setMapData] = useState<CampusMapData>();
+  const [mapData, setMapData] = useState<MapData>();
   const [mapError, setMapError] = useState("");
-  const [step, setStep] = useState<Step>("start");
-  const [pending, setPending] = useState<Choice>();
+  const [mode, setMode] = useState<PublicMode>("view");
+  const [selectedPathId, setSelectedPathId] = useState("");
+  const [selectedPointId, setSelectedPointId] = useState("");
+  const [selectedAlertId, setSelectedAlertId] = useState("");
+  const [selectedBuildingId, setSelectedBuildingId] = useState("");
+  const [buildingFloor, setBuildingFloor] = useState(0);
+  const [showFloorViewer, setShowFloorViewer] = useState(false);
+  const [buildingFloors, setBuildingFloors] = useState<SavedFloorSummary[]>([]);
+  const [floorViewerState, setFloorViewerState] = useState<
+    "loading" | "unavailable" | "error" | "ready"
+  >("unavailable");
+  const [floorViewerLayout, setFloorViewerLayout] = useState<FloorLayout>();
+  const [floorViewerError, setFloorViewerError] = useState("");
   const [start, setStart] = useState<Choice>();
   const [destination, setDestination] = useState<Choice>();
+  const [editingEndpoint, setEditingEndpoint] = useState<EndpointKind>("start");
+  const [pendingChoice, setPendingChoice] = useState<Choice>();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const [profile, setProfile] = useState<TravelProfile>("healthy");
   const [route, setRoute] = useState<Feature<LineString>>();
   const [routeSegments, setRouteSegments] =
     useState<ReturnType<typeof routePresentation>["segments"]>();
   const [approachPoints, setApproachPoints] =
     useState<ReturnType<typeof routePresentation>["approaches"]>();
-  const [messages, setMessages] = useState<string[]>([]);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [routePathIds, setRoutePathIds] = useState<string[]>([]);
+  const [routeOutdated, setRouteOutdated] = useState(false);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [routeMessages, setRouteMessages] = useState<string[]>([]);
   const [requestError, setRequestError] = useState("");
-  const [floor, setFloor] = useState(0);
-  const [noteOpen, setNoteOpen] = useState(false);
   const [noteCoordinate, setNoteCoordinate] = useState<Coordinate>();
   const [note, setNote] = useState("");
-  const [approachTarget, setApproachTarget] = useState<
-    "start" | "destination"
-  >();
+  const [sending, setSending] = useState(false);
+  const [messageSent, setMessageSent] = useState(false);
+  const routeRequestId = useRef(0);
+  const recomputeRouteRef = useRef<() => void>(() => undefined);
+
+  async function loadBuildingFloors(buildingId: string) {
+    const apiBase = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+    const response = await fetch(
+      `${apiBase}/api/buildings/${encodeURIComponent(buildingId)}`,
+    );
+    const payload = await response.json();
+    if (!response.ok)
+      throw new Error(payload?.error ?? "Floor list could not be loaded");
+    return (payload.floors ?? []) as SavedFloorSummary[];
+  }
+
+  async function showRequestedFloor(retry = false) {
+    if (!selectedBuildingId) return;
+    setShowFloorViewer(true);
+    setFloorViewerState("loading");
+    setFloorViewerError("");
+    try {
+      const floors = retry
+        ? buildingFloors
+        : await loadBuildingFloors(selectedBuildingId);
+      setBuildingFloors(floors);
+      if (!floors.some((floor) => floor.floor_number === buildingFloor)) {
+        setFloorViewerLayout(undefined);
+        setFloorViewerState("unavailable");
+        return;
+      }
+      const saved = (await api.floor(
+        selectedBuildingId,
+        buildingFloor,
+      )) as unknown as SavedFloorDetails;
+      const boundaryCoordinates = Array.isArray(saved.boundary)
+        ? saved.boundary[0]
+        : saved.boundary.coordinates?.[0];
+      const transform = saved.mapTransform ?? saved.map_transform;
+      if (!transform)
+        throw new Error("The saved floor has no coordinate transform.");
+      const boundary = (boundaryCoordinates ?? [])
+        .slice(0, -1)
+        .map(([x = 0, y = 0]) => ({ x, y }));
+      const layout: FloorLayout = {
+        buildingId: selectedBuildingId,
+        floor: buildingFloor,
+        version:
+          saved.version ??
+          floors.find((floor) => floor.floor_number === buildingFloor)
+            ?.version ??
+          1,
+        localWidth: saved.localWidth ?? saved.local_width ?? 0,
+        localHeight: saved.localHeight ?? saved.local_height ?? 0,
+        transform,
+        boundary,
+        status: "published",
+        features: saved.features.map((feature) => {
+          const geometry = feature.geometry;
+          if (feature.kind === "room")
+            return {
+              id: feature.id,
+              kind: "room",
+              name: feature.name,
+              x: Number(geometry.x),
+              y: Number(geometry.y),
+              width: Number(geometry.width),
+              height: Number(geometry.height),
+            };
+          if (feature.kind === "door")
+            return {
+              id: feature.id,
+              kind: "door",
+              name: feature.name,
+              parent: geometry.parent as Extract<
+                FloorLayout["features"][number],
+                { kind: "door" }
+              >["parent"],
+              position: Number(geometry.position),
+              isExit: Boolean(feature.is_exit),
+              outdoorPosition: feature.outdoor_position,
+              linkedGraphNodeId: feature.linked_graph_node_id,
+            };
+          if (feature.kind === "stairs" || feature.kind === "lift")
+            return {
+              id: feature.id,
+              kind: feature.kind,
+              name: feature.name,
+              x: Number(geometry.x),
+              y: Number(geometry.y),
+              size: Number(geometry.size),
+              connectorId: feature.connector_id ?? "",
+              servedFloors: feature.served_floors ?? [],
+            };
+          return {
+            id: feature.id,
+            kind: "point",
+            name: feature.name,
+            x: Number(geometry.x),
+            y: Number(geometry.y),
+          };
+        }),
+      };
+      setFloorViewerLayout(layout);
+      setFloorViewerState("ready");
+    } catch (cause) {
+      setFloorViewerError(
+        cause instanceof Error
+          ? cause.message
+          : "Floor layout could not be loaded",
+      );
+      setFloorViewerState("error");
+    }
+  }
+
+  const refreshMap = useCallback(async () => {
+    try {
+      const next = (await api.map()) as MapData;
+      setMapData(next);
+      setMapError("");
+      if (routePathIds.length) {
+        const blockedIds = new Set(
+          next.paths?.features
+            .filter((feature) => feature.properties?.blocked)
+            .map((feature) => feature.properties?.id ?? "") ?? [],
+        );
+        if (routePathIds.some((id) => blockedIds.has(id))) {
+          routeRequestId.current += 1;
+          setRoute(undefined);
+          setRouteSegments(undefined);
+          setApproachPoints(undefined);
+          setRoutePathIds([]);
+          setRouteOutdated(true);
+          setRouteMessages([]);
+          if (start && destination) recomputeRouteRef.current();
+        }
+      }
+    } catch (cause) {
+      setMapError(
+        cause instanceof Error ? cause.message : "Map data could not be loaded",
+      );
+    }
+  }, [routePathIds, start, destination]);
 
   useEffect(() => {
-    api
-      .map()
-      .then(setMapData)
-      .catch((error) =>
-        setMapError(
-          error instanceof Error ? error.message : "Map data is unavailable",
-        ),
-      );
-  }, []);
+    void refreshMap();
+    const refresh = () => {
+      if (document.visibilityState === "visible") void refreshMap();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      window.clearInterval(timer);
+    };
+  }, [refreshMap]);
+
   useEffect(() => {
     let active = true;
-    const timer = setTimeout(async () => {
-      if (query.trim().length < 2) {
+    const timer = window.setTimeout(async () => {
+      if (mode !== "routing" || query.trim().length < 2) {
         setResults([]);
         setSearching(false);
         return;
@@ -203,295 +371,288 @@ export function PublicMap() {
       } finally {
         if (active) setSearching(false);
       }
-    }, 250);
+    }, 220);
     return () => {
       active = false;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [mode, query]);
 
-  const confirmedStartCoordinate = start?.coordinate;
-  const confirmedDestinationCoordinate = destination?.coordinate;
-  const selectedBuildingId =
-    pending?.buildingId ??
-    (step === "start" ? start?.buildingId : destination?.buildingId);
-  const instruction =
-    step === "start"
-      ? "Choose your current location"
-      : step === "destination"
-        ? "Choose your destination"
-        : "Choose a travel profile";
-  const canRoute = Boolean(start && destination);
-  const stepNumber = step === "start" ? 1 : step === "destination" ? 2 : 3;
-  const currentChoice = step === "start" ? start : destination;
-  const noMatches =
-    query.trim().length >= 2 && !searching && results.length === 0 && !pending;
-  const prompt = useMemo(
-    () =>
-      pending
-        ? `${pending.label} is selected. Confirm it in the panel.`
-        : step === "profile"
-          ? "Confirmed locations are ready."
-          : "Search or tap the map.",
-    [pending, step],
+  const selectedPath = mapData?.paths?.features.find(
+    (feature) => feature.properties?.id === selectedPathId,
   );
+  const selectedPoint = mapData?.points.features.find(
+    (feature) => feature.properties?.id === selectedPointId,
+  );
+  const selectedAlert = mapData?.alerts.find(
+    (alert) => alert.id === selectedAlertId,
+  );
+  const selectedPathDetails = selectedPath?.properties;
+  const selectedBuilding = mapData?.buildings.features.find(
+    (feature) => feature.properties.id === selectedBuildingId,
+  );
+  const pendingCoordinate =
+    mode === "send-note" ? noteCoordinate : pendingChoice?.coordinate;
+  const routeSourceIds = (routeSegments?.features ?? []).flatMap((feature) => {
+    const id = feature.properties?.sourceId ?? feature.properties?.pathId;
+    return id ? [id] : [];
+  });
+  const routeNotes = useMemo(() => {
+    const seen = new Set<string>();
+    const notes: string[] = [];
+    for (const segment of routeSegments?.features ?? []) {
+      const id = segment.properties?.sourceId ?? segment.properties?.pathId;
+      const path = id
+        ? mapData?.paths?.features.find(
+            (feature) => feature.properties?.id === id,
+          )
+        : undefined;
+      const text = (
+        segment.properties?.note ??
+        path?.properties?.note ??
+        ""
+      ).trim();
+      const stableId = id ?? text;
+      if (text && !seen.has(stableId)) {
+        seen.add(stableId);
+        notes.push(text);
+      }
+    }
+    return notes;
+  }, [mapData, routeSegments]);
 
-  function clearRouteFeedback() {
+  function clearRoute() {
+    routeRequestId.current += 1;
     setRoute(undefined);
     setRouteSegments(undefined);
     setApproachPoints(undefined);
-    setMessages([]);
+    setRoutePathIds([]);
+    setRouteOutdated(false);
+    setRouteMessages([]);
     setRequestError("");
   }
-  function chooseMapCoordinate(coordinates: Coordinate) {
-    if (noteOpen) {
-      setNoteCoordinate(coordinates);
+
+  function changeMode(next: PublicMode) {
+    routeRequestId.current += 1;
+    setRouteLoading(false);
+    setMode(next);
+    setPendingChoice(undefined);
+    setNoteCoordinate(undefined);
+    setRequestError("");
+    setMessageSent(false);
+    setSelectedPointId("");
+    setSelectedAlertId("");
+    if (next !== "routing") setQuery("");
+  }
+
+  function setLocation(choice: Choice) {
+    if (editingEndpoint === "start") {
+      setStart(choice);
+      setEditingEndpoint("destination");
+    } else {
+      setDestination(choice);
+    }
+    setPendingChoice(undefined);
+    setQuery("");
+    clearRoute();
+  }
+
+  function chooseMapPoint(coordinate: Coordinate) {
+    if (mode === "send-note") {
+      setNoteCoordinate(coordinate);
+      setMessageSent(false);
       return;
     }
-    if (approachTarget) {
-      const updateChoice = (choice: Choice | undefined) =>
-        choice
-          ? {
-              ...choice,
-              coordinate: coordinates,
-              context: `${choice.context} · chosen boundary approach`,
-              endpoint: {
-                ...choice.endpoint,
-                approachCoordinates: coordinates,
-              } as unknown as RouteEndpoint,
-            }
-          : choice;
-      if (approachTarget === "start") setStart(updateChoice);
-      else setDestination(updateChoice);
-      setApproachTarget(undefined);
-      clearRouteFeedback();
-      setMessages([
-        "Entrance/exit side selected. Find the route again to use this approximate approach.",
-      ]);
-      return;
-    }
-    if (step === "profile") return;
-    setPending({
-      label: "Dropped pin",
-      context: `${coordinates[1].toFixed(6)}, ${coordinates[0].toFixed(6)}`,
-      endpoint: { kind: "outdoor", coordinates },
-      coordinate: coordinates,
+    if (mode !== "routing") return;
+    clearRoute();
+    setPendingChoice({
+      label: "Map point",
+      endpoint: { kind: "outdoor", coordinates: coordinate },
+      coordinate,
     });
     setQuery("");
-    setResults([]);
   }
+
   function chooseBuilding(id: string) {
-    if (noteOpen || step === "profile") return;
-    const building = mapData?.buildings.features.find(
-      (feature) => feature.properties.id === id,
-    );
-    setPending({
-      label: building?.properties.name ?? "Mapped building",
-      context: `Building · floor ${floor}`,
-      endpoint: { kind: "building", buildingId: id, floor },
-      buildingId: id,
-    });
-    setQuery(building?.properties.name ?? "");
-    setResults([]);
+    if (mode === "routing") {
+      const building = mapData?.buildings.features.find(
+        (feature) => feature.properties.id === id,
+      );
+      const choice: Choice = {
+        label: building?.properties.name ?? "Mapped building",
+        buildingId: id,
+        endpoint: { kind: "building", buildingId: id } as RouteEndpoint,
+      };
+      setPendingChoice(choice);
+      setQuery("");
+      return;
+    }
+    if (mode === "view") {
+      setSelectedBuildingId(id);
+      setBuildingFloor(0);
+      setShowFloorViewer(false);
+      setBuildingFloors([]);
+      setFloorViewerLayout(undefined);
+      void loadBuildingFloors(id)
+        .then(setBuildingFloors)
+        .catch((cause: unknown) => {
+          setFloorViewerError(
+            cause instanceof Error
+              ? cause.message
+              : "Floor list could not be loaded",
+          );
+        });
+      setSelectedPathId("");
+      setSelectedPointId("");
+      setSelectedAlertId("");
+    }
   }
-  function chooseResult(result: SearchResult) {
-    if (result.kind === "building" || result.buildingId) {
-      const buildingId =
-        result.kind === "building" ? result.id : result.buildingId!;
-      const selectedFloor = result.floor ?? floor;
-      setFloor(selectedFloor);
-      setPending({
+
+  function chooseSearchResult(result: SearchResult) {
+    clearRoute();
+    const buildingId =
+      result.kind === "building" ? result.id : result.buildingId;
+    if (buildingId) {
+      setPendingChoice({
         label: result.name,
-        context: `${result.kind === "building" ? "Building" : "Mapped room or facility"} · floor ${selectedFloor}`,
-        endpoint: {
-          kind: "building",
-          buildingId,
-          floor: selectedFloor,
-          ...(result.kind === "room" ? { roomId: result.id } : {}),
-        },
         buildingId,
+        endpoint: { kind: "building", buildingId } as RouteEndpoint,
         coordinate:
           result.longitude != null && result.latitude != null
             ? [result.longitude, result.latitude]
             : undefined,
       });
     } else if (result.longitude != null && result.latitude != null) {
-      const coordinate: Coordinate = [result.longitude, result.latitude];
-      setPending({
+      const coordinates: Coordinate = [result.longitude, result.latitude];
+      setPendingChoice({
         label: result.name,
-        context: result.kind === "point" ? "Mapped outdoor point" : result.kind,
-        endpoint: { kind: "outdoor", coordinates: coordinate },
-        coordinate,
-      });
-    } else {
-      setPending({
-        label: result.name,
-        context: `${result.kind} · not route-ready because its building/floor link is missing`,
-        endpoint: { kind: "outdoor", coordinates: [Number.NaN, Number.NaN] },
+        endpoint: { kind: "outdoor", coordinates },
+        coordinate: coordinates,
       });
     }
     setQuery(result.name);
     setResults([]);
   }
-  function confirmChoice() {
-    if (
-      !pending ||
-      (pending.endpoint.kind === "outdoor" &&
-        pending.endpoint.coordinates.some(Number.isNaN))
-    )
-      return;
-    const choice =
-      pending.endpoint.kind === "building"
-        ? {
-            ...pending,
-            context: `Building · floor ${floor}`,
-            endpoint: { ...pending.endpoint, floor },
-          }
-        : pending;
-    if (step === "start") {
-      setStart(choice);
-      setStep("destination");
-    } else {
-      setDestination(choice);
-      setStep("profile");
-    }
-    setPending(undefined);
-    setQuery("");
-    clearRouteFeedback();
-  }
-  function edit(which: "start" | "destination") {
-    setStep(which);
-    setPending(undefined);
-    setQuery("");
-    clearRouteFeedback();
-  }
-  function locate() {
+
+  function locateStart() {
     navigator.geolocation?.getCurrentPosition(
       (position) => {
-        const coordinate: Coordinate = [
+        const coordinates: Coordinate = [
           position.coords.longitude,
           position.coords.latitude,
         ];
-        setPending({
-          label: "Phone location",
-          context: `Accuracy about ${Math.round(position.coords.accuracy)} m · confirm or move the marker`,
-          endpoint: { kind: "outdoor", coordinates: coordinate },
-          coordinate,
+        setPendingChoice({
+          label: "Current location",
+          endpoint: { kind: "outdoor", coordinates },
+          coordinate: coordinates,
         });
-        setMessages([
-          "GPS does not prove that you are inside a building. If you are indoors, select the mapped building and its ground-floor exit instead.",
-        ]);
       },
       () =>
         setRequestError(
-          "Location permission was unavailable. Search or tap the map instead.",
+          "Location permission was denied. Search for a place or select a map point instead.",
         ),
       { enableHighAccuracy: true },
     );
   }
-  async function requestRoute() {
+
+  async function findRoute() {
     if (!start || !destination) return;
+    const requestId = ++routeRequestId.current;
     setRouteLoading(true);
     setRequestError("");
-    setMessages([]);
+    setRouteMessages([]);
+    setRoute(undefined);
+    setRouteSegments(undefined);
+    setApproachPoints(undefined);
+    setRouteOutdated(false);
     try {
       const response = await api.route(
         profile,
         start.endpoint,
         destination.endpoint,
       );
+      if (requestId !== routeRequestId.current) return;
       if (response.status === "ok") {
-        setApproachTarget(undefined);
         const presentation = routePresentation(response);
         setRoute({
           type: "Feature",
           properties: {},
           geometry: response.geometry,
         });
-        setRouteSegments(
-          presentation.segments.features.length
-            ? presentation.segments
-            : undefined,
-        );
-        setApproachPoints(
-          presentation.approaches.features.length
-            ? presentation.approaches
-            : undefined,
-        );
-        const hasProvisional = presentation.segments.features.some(
-          ({ properties }) =>
-            properties.status === "provisional" ||
-            properties.confidence === "provisional" ||
-            properties.confidence === "approximate",
-        );
-        const hasApproximateApproach = presentation.approaches.features.some(
-          ({ properties }) => properties.approximate,
-        );
-        setMessages(
-          Array.from(
-            new Set([
-              ...(hasProvisional
-                ? [
-                    "Suggested route based on map data; paths and accessibility have not been field-verified.",
-                  ]
-                : []),
-              ...(hasApproximateApproach
-                ? ["Approximate approach; entrance is unconfirmed."]
-                : []),
-              ...response.notices,
-            ]),
-          ),
+        setRouteSegments(presentation.segments);
+        setApproachPoints(presentation.approaches);
+        const sourceIds = presentation.segments.features.flatMap((feature) => {
+          const id = feature.properties?.sourceId ?? feature.properties?.pathId;
+          return id ? [id] : [];
+        });
+        setRoutePathIds([...new Set(sourceIds)]);
+        setRouteMessages(
+          (response as Extract<RouteResponse, { status: "ok" }>).notices ?? [],
         );
       } else {
-        const outcome = response as unknown as {
-          code?: string;
-          message?: string;
-          reason?: string;
-        };
-        setRoute(undefined);
-        setRouteSegments(undefined);
-        setApproachPoints(undefined);
-        if (outcome.code === "NO_PLAUSIBLE_APPROACH") {
-          if (start.endpoint.kind === "building") setApproachTarget("start");
-          else if (destination.endpoint.kind === "building")
-            setApproachTarget("destination");
-        }
-        setMessages([
-          outcome.code
-            ? visitorReason(outcome.code)
-            : outcome.message
-              ? visitorReason(outcome.message)
-              : visitorReason(outcome.reason ?? ""),
-          ...response.notices,
-        ]);
+        setRoutePathIds([]);
+        setRouteMessages([noRouteMessages[response.code] ?? response.message]);
       }
-    } catch (error) {
-      setRoute(undefined);
-      setRouteSegments(undefined);
-      setApproachPoints(undefined);
-      setRequestError(
-        error instanceof Error
-          ? error.message
-          : "The route service could not complete this request.",
-      );
+    } catch (cause) {
+      if (requestId === routeRequestId.current)
+        setRequestError(
+          cause instanceof Error
+            ? cause.message
+            : "Route could not be calculated.",
+        );
     } finally {
-      setRouteLoading(false);
+      if (requestId === routeRequestId.current) setRouteLoading(false);
     }
   }
+  recomputeRouteRef.current = () => {
+    void findRoute();
+  };
+
   async function sendNote() {
-    if (!noteCoordinate || !note.trim()) return;
+    const text = note.trim();
+    if (!noteCoordinate || !text || text.length > maximumNoteLength || sending)
+      return;
+    setSending(true);
+    setRequestError("");
     try {
-      await api.message(noteCoordinate, note);
+      await api.message(noteCoordinate, text);
       setNote("");
       setNoteCoordinate(undefined);
-      setNoteOpen(false);
-      setMessages(["Your map note was sent to the campus editor."]);
-    } catch (error) {
+      setMessageSent(true);
+    } catch (cause) {
       setRequestError(
-        error instanceof Error ? error.message : "The note could not be sent.",
+        cause instanceof Error
+          ? cause.message
+          : "Message could not be sent. Try again.",
       );
+    } finally {
+      setSending(false);
     }
   }
+
+  const startCoordinate = start?.coordinate;
+  const destinationCoordinate = destination?.coordinate;
+  const canFindRoute = Boolean(
+    start && destination && !pendingChoice && !query.trim(),
+  );
+  const mapSelectedBuildingId =
+    mode === "view"
+      ? selectedBuildingId
+      : mode === "routing"
+        ? (pendingChoice?.buildingId ??
+          (editingEndpoint === "start"
+            ? start?.buildingId
+            : destination?.buildingId))
+        : undefined;
+  const paths = [...(mapData?.paths?.features ?? [])].sort((left, right) => {
+    const byName = (left.properties?.name ?? "").localeCompare(
+      right.properties?.name ?? "",
+    );
+    return (
+      byName ||
+      (left.properties?.id ?? "").localeCompare(right.properties?.id ?? "")
+    );
+  });
 
   return (
     <main className="app-shell public-map-page">
@@ -502,182 +663,345 @@ export function PublicMap() {
         </div>
         <a href="/edit/login">Editor sign in</a>
       </header>
+      <nav className="public-modes" role="tablist" aria-label="Map mode">
+        {(
+          [
+            ["view", "View"],
+            ["routing", "Routing"],
+            ["send-note", "Send Note"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            role="tab"
+            aria-selected={mode === value}
+            className={mode === value ? "active" : ""}
+            onClick={() => changeMode(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       <section className="workspace">
         <div className="map-wrap">
           <CampusMap
             data={mapData}
-            start={confirmedStartCoordinate}
-            destination={confirmedDestinationCoordinate}
-            pending={noteOpen ? noteCoordinate : pending?.coordinate}
+            interactionMode={mode}
+            start={startCoordinate}
+            destination={destinationCoordinate}
+            pending={pendingCoordinate}
             route={route}
             routeSegments={routeSegments}
             approachPoints={approachPoints}
-            selectedBuildingId={selectedBuildingId}
-            onPick={chooseMapCoordinate}
+            selectedBuildingId={mapSelectedBuildingId}
+            onPick={chooseMapPoint}
             onBuilding={chooseBuilding}
+            onPath={(id) => {
+              if (mode === "view") {
+                setSelectedPathId(id);
+                setSelectedPointId("");
+                setSelectedAlertId("");
+                setSelectedBuildingId("");
+              }
+            }}
+            onPoint={(id) => {
+              if (mode === "view") {
+                setSelectedPointId(id);
+                setSelectedPathId("");
+                setSelectedAlertId("");
+                setSelectedBuildingId("");
+              }
+            }}
+            onAlert={(id) => {
+              if (mode === "view") {
+                setSelectedAlertId(id);
+                setSelectedPathId("");
+                setSelectedPointId("");
+                setSelectedBuildingId("");
+              }
+            }}
+            onPendingMove={mode === "send-note" ? setNoteCoordinate : undefined}
           />
           <div className="map-prompt">
             <b>
-              {noteOpen
-                ? "Place your note"
-                : approachTarget
-                  ? "Choose an entrance/exit side"
-                  : instruction}
+              {mode === "view"
+                ? "Explore campus"
+                : mode === "routing"
+                  ? "Choose route locations"
+                  : "Select a location on the map"}
             </b>
             <span>
-              {noteOpen
+              {mode === "send-note"
                 ? noteCoordinate
-                  ? "Marker placed — write the note in the panel."
-                  : "Tap the issue location."
-                : approachTarget
-                  ? "Tap the outer boundary on the side facing a walking path."
-                  : prompt}
+                  ? "Location: Selected"
+                  : "Select a location on the map"
+                : mode === "routing"
+                  ? "Search a building or place, or select a point on the map."
+                  : "Select a path, alert, point or building to view details."}
             </span>
           </div>
         </div>
         <aside className="panel public-route-panel">
-          <div className="steps" aria-label={`Step ${stepNumber} of 3`}>
-            <button
-              className={step === "start" ? "active" : start ? "done" : ""}
-              onClick={() => edit("start")}
+          {mode === "view" && (
+            <section
+              className="public-view-panel"
+              aria-label="Campus map details"
             >
-              1 Start
-            </button>
-            <button
-              className={
-                step === "destination" ? "active" : destination ? "done" : ""
-              }
-              onClick={() => start && edit("destination")}
-              disabled={!start}
-            >
-              2 Destination
-            </button>
-            <span className={step === "profile" ? "active" : ""}>
-              3 Profile / Route
-            </span>
-          </div>
-          <div className="confirmed-summary">
-            {start && (
-              <div>
-                <span>
-                  <b>Start</b>
-                  {start.label}
-                </span>
-                <button onClick={() => edit("start")}>Edit</button>
-              </div>
-            )}
-            {destination && (
-              <div>
-                <span>
-                  <b>Destination</b>
-                  {destination.label}
-                </span>
-                <button onClick={() => edit("destination")}>Edit</button>
-              </div>
-            )}
-          </div>
-          {!noteOpen && step !== "profile" && (
-            <section className="choice-step">
-              <h2>{instruction}</h2>
+              <h2>View campus</h2>
               <label className="field">
-                Search mapped places
-                <input
-                  value={query}
+                Route or path
+                <select
+                  aria-label="Select route or path"
+                  value={selectedPathId}
                   onChange={(event) => {
-                    setQuery(event.target.value);
-                    setPending(undefined);
+                    setSelectedPathId(event.target.value);
+                    setSelectedPointId("");
+                    setSelectedAlertId("");
+                    setSelectedBuildingId("");
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && results.length === 1)
-                      chooseResult(results[0]!);
-                  }}
-                  placeholder={
-                    step === "start"
-                      ? "Building, gate, room or point"
-                      : "Where do you want to go?"
-                  }
-                  autoComplete="off"
-                />
-              </label>
-              {results.length > 0 && (
-                <ul className="search-results">
-                  {results.map((result) => (
-                    <li key={`${result.kind}-${result.id}`}>
-                      <button onClick={() => chooseResult(result)}>
-                        <span>
-                          <b>{result.name}</b>
-                          <small>
-                            {result.kind === "feature"
-                              ? "Mapped room or facility"
-                              : result.kind}
-                          </small>
-                        </span>
-                        <span aria-hidden>›</span>
-                      </button>
-                    </li>
+                >
+                  <option value="">Choose a path</option>
+                  {paths.map((feature, index) => (
+                    <option
+                      key={feature.properties?.id}
+                      value={feature.properties?.id}
+                    >
+                      {feature.properties?.name ||
+                        `Path ${String(index + 1).padStart(2, "0")}`}
+                    </option>
                   ))}
-                </ul>
-              )}
-              {searching && <p className="muted">Searching mapped places…</p>}
-              {noMatches && <p className="empty">No matching mapped place.</p>}
-              {step === "start" && (
-                <button className="gps-button" onClick={locate}>
-                  Use phone GPS
-                </button>
-              )}
-              {pending && (
-                <div className="selection-card">
-                  <span className="selection-kicker">
-                    Selected — not yet confirmed
-                  </span>
-                  <h3>{pending.label}</h3>
-                  <p>{pending.context}</p>
-                  {pending.buildingId && (
-                    <label className="field">
-                      Floor
-                      <input
-                        type="number"
-                        value={floor}
-                        onChange={(event) =>
-                          setFloor(Number(event.target.value))
-                        }
-                      />
-                    </label>
-                  )}
-                  {pending.endpoint.kind === "outdoor" &&
-                  pending.endpoint.coordinates.some(Number.isNaN) ? (
-                    <p className="selection-warning">
-                      Choose its mapped building first; this result has no safe
-                      outdoor route endpoint.
-                    </p>
-                  ) : (
-                    <button className="primary full" onClick={confirmChoice}>
-                      Confirm {step}
-                    </button>
+                </select>
+              </label>
+              {selectedPathDetails && (
+                <div className="feature-detail">
+                  <h3>{selectedPathDetails.name || "Selected path"}</h3>
+                  <p>
+                    {selectedPathDetails.blocked
+                      ? "Blocked"
+                      : "Good for routing"}
+                  </p>
+                  {selectedPathDetails.note && (
+                    <p>{selectedPathDetails.note}</p>
                   )}
                 </div>
               )}
-              {currentChoice && !pending && (
-                <button
-                  className="primary full"
-                  onClick={() =>
-                    setStep(step === "start" ? "destination" : "profile")
-                  }
-                >
-                  Keep {currentChoice.label}
-                </button>
+              {selectedPoint && (
+                <div className="feature-detail">
+                  <h3>{selectedPoint.properties?.name || "Outdoor point"}</h3>
+                  <p>{selectedPoint.properties?.note || "No note."}</p>
+                </div>
               )}
-              {step === "destination" && (
-                <button className="back" onClick={() => edit("start")}>
-                  ← Back to start
-                </button>
+              {selectedAlert && (
+                <div className="feature-detail">
+                  <h3>Campus alert</h3>
+                  <p>{selectedAlert.description}</p>
+                </div>
               )}
+              {selectedBuilding && !showFloorViewer && (
+                <div className="feature-detail building-view-card">
+                  <h3>{selectedBuilding.properties.name}</h3>
+                  <p>Building selected</p>
+                  <label className="field">
+                    Floor
+                    <select
+                      value={buildingFloor}
+                      onChange={(event) =>
+                        setBuildingFloor(Number(event.target.value))
+                      }
+                      aria-label="Select building floor"
+                    >
+                      {buildingFloors.length ? (
+                        buildingFloors.map((floor) => (
+                          <option key={floor.id} value={floor.floor_number}>
+                            {floor.floor_number === 0
+                              ? "Ground floor"
+                              : `Floor ${floor.floor_number}`}
+                          </option>
+                        ))
+                      ) : (
+                        <option value={0}>Ground floor</option>
+                      )}
+                    </select>
+                  </label>
+                  <button
+                    className="primary full"
+                    onClick={() => void showRequestedFloor()}
+                  >
+                    View floor layout
+                  </button>
+                </div>
+              )}
+              {showFloorViewer && selectedBuilding && (
+                <div className="feature-detail floor-view-panel">
+                  <div className="floor-view-heading">
+                    <h3>
+                      {selectedBuilding.properties.name} ·{" "}
+                      {buildingFloor === 0
+                        ? "Ground floor"
+                        : `Floor ${buildingFloor}`}
+                    </h3>
+                    <button
+                      className="back"
+                      onClick={() => setShowFloorViewer(false)}
+                    >
+                      Back to map
+                    </button>
+                  </div>
+                  <FloorViewer
+                    state={floorViewerState}
+                    layout={floorViewerLayout}
+                    buildingName={selectedBuilding.properties.name}
+                    error={floorViewerError}
+                    onRetry={() => void showRequestedFloor(true)}
+                  />
+                </div>
+              )}
+              {!selectedPath &&
+                !selectedPoint &&
+                !selectedAlert &&
+                !selectedBuilding && (
+                  <p className="muted">
+                    Choose a feature on the map or select a path above.
+                  </p>
+                )}
             </section>
           )}
-          {!noteOpen && step === "profile" && (
-            <section className="route-controls">
-              <h2>Profile and route</h2>
-              <div className="profiles">
+          {mode === "routing" && (
+            <section className="routing-panel" aria-label="Outdoor routing">
+              <h2>Outdoor routing</h2>
+              <div className="route-location">
+                <label className="field">
+                  Start
+                  <input
+                    value={
+                      editingEndpoint === "start" ? query : (start?.label ?? "")
+                    }
+                    onFocus={() => setEditingEndpoint("start")}
+                    onChange={(event) => {
+                      setEditingEndpoint("start");
+                      setQuery(event.target.value);
+                      setPendingChoice(undefined);
+                      clearRoute();
+                    }}
+                    placeholder="Search a place or choose map point"
+                    autoComplete="off"
+                  />
+                </label>
+                {editingEndpoint === "start" && results.length > 0 && (
+                  <ul className="search-results">
+                    {results.map((item) => (
+                      <li key={`${item.kind}-${item.id}`}>
+                        <button onClick={() => chooseSearchResult(item)}>
+                          {item.name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {editingEndpoint === "start" && (
+                  <button className="gps-button" onClick={locateStart}>
+                    Use phone GPS
+                  </button>
+                )}
+                {start && (
+                  <button
+                    className="quiet"
+                    onClick={() => {
+                      setEditingEndpoint("start");
+                      setQuery("");
+                      setPendingChoice(undefined);
+                      clearRoute();
+                    }}
+                  >
+                    Change start
+                  </button>
+                )}
+                {start && (
+                  <button
+                    className="quiet"
+                    onClick={() => {
+                      setStart(undefined);
+                      setEditingEndpoint("start");
+                      setQuery("");
+                      clearRoute();
+                    }}
+                  >
+                    Clear start
+                  </button>
+                )}
+              </div>
+              <div className="route-location">
+                <label className="field">
+                  Destination
+                  <input
+                    value={
+                      editingEndpoint === "destination"
+                        ? query
+                        : (destination?.label ?? "")
+                    }
+                    onFocus={() => setEditingEndpoint("destination")}
+                    onChange={(event) => {
+                      setEditingEndpoint("destination");
+                      setQuery(event.target.value);
+                      setPendingChoice(undefined);
+                      clearRoute();
+                    }}
+                    placeholder="Search a building or place"
+                    autoComplete="off"
+                  />
+                </label>
+                {editingEndpoint === "destination" && results.length > 0 && (
+                  <ul className="search-results">
+                    {results.map((item) => (
+                      <li key={`${item.kind}-${item.id}`}>
+                        <button onClick={() => chooseSearchResult(item)}>
+                          {item.name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {destination && (
+                  <button
+                    className="quiet"
+                    onClick={() => {
+                      setEditingEndpoint("destination");
+                      setQuery("");
+                      setPendingChoice(undefined);
+                      clearRoute();
+                    }}
+                  >
+                    Change destination
+                  </button>
+                )}
+                {destination && (
+                  <button
+                    className="quiet"
+                    onClick={() => {
+                      setDestination(undefined);
+                      setEditingEndpoint("destination");
+                      setQuery("");
+                      clearRoute();
+                    }}
+                  >
+                    Clear destination
+                  </button>
+                )}
+              </div>
+              {searching && <p className="muted">Searching…</p>}
+              {pendingChoice && (
+                <div className="selection-card">
+                  <span className="selection-kicker">Location selected</span>
+                  <h3>{pendingChoice.label}</h3>
+                  <button
+                    className="primary full"
+                    onClick={() => setLocation(pendingChoice)}
+                  >
+                    Use as {editingEndpoint}
+                  </button>
+                </div>
+              )}
+              <div className="profiles" aria-label="Travel profile">
                 {(Object.keys(profileLabels) as TravelProfile[]).map(
                   (value) => (
                     <button
@@ -685,7 +1009,7 @@ export function PublicMap() {
                       className={profile === value ? "selected" : ""}
                       onClick={() => {
                         setProfile(value);
-                        clearRouteFeedback();
+                        clearRoute();
                       }}
                     >
                       {profileLabels[value]}
@@ -695,73 +1019,86 @@ export function PublicMap() {
               </div>
               <button
                 className="primary full"
-                disabled={!canRoute || routeLoading}
-                onClick={requestRoute}
+                disabled={!canFindRoute || routeLoading}
+                onClick={() => void findRoute()}
               >
                 {routeLoading ? "Finding a route…" : "Find route"}
               </button>
-              <button className="back" onClick={() => edit("destination")}>
-                ← Back to destination
-              </button>
-            </section>
-          )}
-          <section className="map-note">
-            <button
-              className="quiet note-toggle"
-              onClick={() => {
-                setNoteOpen((value) => !value);
-                setPending(undefined);
-              }}
-            >
-              {noteOpen ? "Cancel map note" : "Send a map note"}
-            </button>
-            {noteOpen && (
-              <div>
-                <p className="muted">
-                  Tap the map where the issue is. Notes do not automatically
-                  block a route.
-                </p>
-                <label className="field">
-                  What should the editor know?
-                  <textarea
-                    maxLength={1000}
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                </label>
-                <button
-                  className="primary full"
-                  disabled={!noteCoordinate || !note.trim()}
-                  onClick={sendNote}
-                >
-                  Send note at marker
-                </button>
-              </div>
-            )}
-          </section>
-          {messages.length > 0 && (
-            <div className="notice" role="status">
-              {messages.map((message, index) => (
-                <p key={index}>{message}</p>
-              ))}
-              {approachTarget && (
-                <button
-                  className="approach-cancel"
-                  onClick={() => setApproachTarget(undefined)}
-                >
-                  Cancel side selection
+              {(route || routeOutdated) && (
+                <button className="quiet full" onClick={clearRoute}>
+                  Clear route
                 </button>
               )}
-            </div>
+              {routeOutdated && (
+                <p className="notice" role="status">
+                  This route changed. Find a new route to continue.
+                </p>
+              )}
+              {routeMessages.map((text, index) => (
+                <p className="notice" role="status" key={`${index}-${text}`}>
+                  {text}
+                </p>
+              ))}
+              {routeNotes.map((text, index) => (
+                <p className="route-note" key={`${index}-${text}`}>
+                  {text}
+                </p>
+              ))}
+              {route && routeSourceIds.length === 0 && (
+                <p className="muted">Route is ready.</p>
+              )}
+              {requestError && (
+                <p className="error" role="alert">
+                  {requestError}
+                </p>
+              )}
+            </section>
           )}
-          {requestError && (
-            <p className="error" role="alert">
-              {requestError}
-            </p>
+          {mode === "send-note" && (
+            <section
+              className="send-note-panel"
+              aria-label="Send a note to the editor"
+            >
+              <h2>Send Note</h2>
+              <p className="location-selected">
+                {noteCoordinate
+                  ? "Location: Selected"
+                  : "Select a location on the map"}
+              </p>
+              <label className="field">
+                What should the editor know?{" "}
+                <small>
+                  {note.length}/{maximumNoteLength}
+                </small>
+                <textarea
+                  maxLength={maximumNoteLength}
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                />
+              </label>
+              <button
+                className="primary full"
+                disabled={!noteCoordinate || !note.trim() || sending}
+                onClick={() => void sendNote()}
+              >
+                {sending ? "Sending…" : "Send"}
+              </button>
+              {messageSent && (
+                <p className="success-message" role="status">
+                  Message sent to editor
+                </p>
+              )}
+              {requestError && (
+                <p className="error" role="alert">
+                  {requestError}
+                </p>
+              )}
+            </section>
           )}
           {mapError && (
             <p className="error" role="alert">
-              Map data: {mapError}
+              Map data: {mapError}{" "}
+              <button onClick={() => void refreshMap()}>Retry</button>
             </p>
           )}
         </aside>

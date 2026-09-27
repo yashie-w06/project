@@ -6,7 +6,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:unit": "node --import tsx --test src/osm/parse.test.ts src/routing/routing.test.ts src/server.test.ts",
+    "test:unit": "node --import tsx --test src/osm/parse.test.ts src/routing/routing.test.ts src/routing/split-paths.test.ts src/server.test.ts",
     "test:integration": "tsx ../../tests/integration/live-db.ts",
     "start": "node dist/server.js",
     "migrate": "tsx src/migrate.ts",

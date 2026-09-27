@@ -1,6 +1,6 @@
 # SGSITS Campus Access v2
 
-An SGSITS walking map and indoor floor-layout prototype. The public app has exactly three routes: `/`, `/edit/login`, and protected `/edit`. Confirmed editor paths and conservatively eligible OSM geometry share one routing engine, but OSM-derived paths and approximate building approaches are always labelled provisional and unverified.
+An SGSITS campus map with provisional OSM walking routes, approximate outdoor building approaches, informational campus points/alerts, and saved floor-plan viewing. The public map has three modes: View, Routing, and Send Note. OSM-derived routes are presented as provisional; this is not a field-verified accessibility service.
 
 ## Stack and workspace
 
@@ -8,7 +8,7 @@ An SGSITS walking map and indoor floor-layout prototype. The public app has exac
 - `apps/api`: Express 5, TypeScript, PostgreSQL via `pg`, Zod, Jose, `fast-xml-parser`
 - Hosting target: Vercel for the SPA and Railway for the API plus one Railway PostgreSQL service
 
-The bundled `apps/api/data/campus.osm` is immutable source data. The deterministic importer finds 49 buildings and 15 highway reference candidates (60 adjacent pairs). The extract contains 12 private campus `service`, two `tertiary`, and one `tertiary_link` ways, but no `footway`, `path`, or `pedestrian` ways. The service ways may support suggested provisional routes; arterial roads and reviewer-rejected/needs-edit geometry are excluded.
+The bundled `apps/api/data/campus.osm` is immutable source data. The deterministic importer finds 49 buildings and 15 candidate ways. Structurally eligible paths are routed from OSM geometry without requiring legacy reviewer approval. Forbidden access, arterial-only geometry, barriers, and lines crossing building interiors remain excluded. Explicit path blocks and wheelchair-ineligible shortcuts are respected.
 
 ## Local setup
 
@@ -58,14 +58,12 @@ Public route request (coordinate arrays are always `[longitude, latitude]`):
   "start": { "kind": "outdoor", "coordinates": [75.8717, 22.7263] },
   "destination": {
     "kind": "building",
-    "buildingId": "osm-building-123",
-    "floor": 1,
-    "entranceDoorId": "door-main"
+    "buildingId": "osm-building-123"
   }
 }
 ```
 
-Success returns `status: "ok"`, a GeoJSON `LineString`, snap corrections, and notices—never a displayed distance. Disconnected or unsnappable requests return a successful `status: "no_route"` payload. Public notes use `POST /api/messages` with `{ "coordinates": [lon, lat], "description": "..." }` and are rate limited.
+Success returns `status: "ok"`, a GeoJSON `LineString`, path segments/notes, and building-approach notices. Disconnected or unsnappable requests return a `status: "no_route"` payload with a clear no-route message. The interface does not display route distance or indoor turn-by-turn guidance. Public notes use `POST /api/messages` with `{ "coordinates": [lon, lat], "description": "..." }` and are rate limited; they remain private to authenticated editors.
 
 Editor login uses `POST /api/editor/login`. Send its short-lived token as `Authorization: Bearer <token>` for all `/api/editor/*` mutations. Anonymous writes return 401; validation, missing IDs, and optimistic-version conflicts return 400, 404, and 409 respectively.
 
@@ -96,16 +94,16 @@ pnpm build
 pnpm test:e2e
 ```
 
-Focused tests cover deterministic OSM import, provisional eligibility and provenance, metric snapping and edge splitting, confirmed/provisional graph composition, approximate approaches, blocks, all three profiles, concave floor containment, doors/exits, connectors, API health/auth/validation, and desktop/mobile SPA flows. Database integration tests require a real PostgreSQL URL and are performed after migrations.
+Focused tests cover deterministic OSM import, structural routing eligibility, metric snapping and durable split topology, path blocks/notes, all three profiles, approximate approaches, floor geometry/viewer states, API health/auth/validation, and desktop/mobile SPA flows. Database integration tests require a real PostgreSQL URL and run after migrations.
 
 ## Accuracy and safety limits
 
-- The OSM campus boundary is reference-only and may cross building footprints; buildings are not deleted because of it.
-- A building footprint is only an approximate initial floor outline.
+- OSM-derived outdoor lines are provisional map data, not proof of physical walkability; approximate building approaches are not surveyed entrances.
+- A building footprint is only an approximate initial floor outline. Saved indoor layouts are read-only and do not provide room-level routing.
+- Ground-floor lift/stairs information is informational. Shortcuts are excluded from wheelchair routing; OSM wheelchair tags are not a verified accessibility assessment.
+- Informational alerts do not block or reroute paths. Editors block a path explicitly when needed.
 - Raster tiles are visual context, with OpenStreetMap attribution; they are never routing data.
-- Indoor features and vertical-access notices are informational. No indoor turn-by-turn route is fabricated.
-- Suggested routes based on OSM service geometry are not field-verified and do not establish wheelchair accessibility. Rejected, needs-edit, forbidden, arterial, barrier-blocked, and building-crossing geometry is excluded.
 
-The current candidate checklist and exact endpoint coordinates are in [`docs/field-verification.md`](docs/field-verification.md). A later campus walk can promote suitable geometry to confirmed paths without blocking provisional software deployment.
+The deferred campus survey task is documented in [`docs/field-verification.md`](docs/field-verification.md). Field verification is separate from software completion and does not block deployment of the provisional routing experience.
 
-The completed repair audit, root causes, live-data correction, browser coverage, and deployment handoff are documented in [`docs/repair-findings.md`](docs/repair-findings.md). The editor supports map-first building/floor selection, reloadable versioned drafts, guarded exit linking, and alert resolution. Central Library to LT is the live provisional acceptance route.
+The simplified product implementation, current checks, and remaining field task are tracked in [`docs/simplification-update-status.md`](docs/simplification-update-status.md). The editor supports named/blocked paths, 5 m server-validated snapped shortcuts, public points and informational alerts, one-step public floor saves, and private visitor-message deletion.

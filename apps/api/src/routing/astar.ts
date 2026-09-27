@@ -13,6 +13,9 @@ export interface RouteResult {
 
 export interface RouteSegment {
   readonly edgeId: string;
+  readonly pathId: string;
+  readonly kind: "main" | "shortcut";
+  readonly note: string | null;
   readonly status: "confirmed" | "provisional";
   readonly source: "editor" | "osm" | "query";
   readonly sourceOsmId: string | null;
@@ -71,6 +74,9 @@ function reconstruct(
       arcs.map((arc) =>
         Object.freeze({
           edgeId: arc.edgeId,
+          pathId: arc.parentFeatureId,
+          kind: arc.kind,
+          note: arc.note,
           status: arc.status,
           source: arc.source,
           sourceOsmId: arc.sourceOsmId,

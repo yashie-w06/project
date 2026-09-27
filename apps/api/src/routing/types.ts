@@ -12,6 +12,8 @@ export interface RouteNode {
 
 export interface RouteEdge {
   readonly id: string;
+  /** Stable displayed path identity shared by all derived subedges. */
+  readonly parentFeatureId?: string;
   readonly fromNodeId: string;
   readonly toNodeId: string;
   readonly coordinates: readonly LonLat[];
@@ -25,6 +27,9 @@ export interface RouteEdge {
   readonly sourceOsmId?: string | null;
   readonly osmHighway?: string | null;
   readonly wheelchairEligible?: boolean;
+  readonly name?: string | null;
+  readonly note?: string | null;
+  readonly version?: number;
 }
 
 export interface ActiveBlock {

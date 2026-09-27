@@ -16,6 +16,12 @@ export type DoorSnap = {
   distance: number;
 };
 
+export type DoorDisplayGeometry = {
+  point: LocalPoint;
+  rotation: number;
+  leafLength: number;
+};
+
 export type CentredLabel = {
   x: number;
   y: number;
@@ -24,21 +30,33 @@ export type CentredLabel = {
   fontSize: number;
 };
 
+export type PolygonLabelPlacement = CentredLabel & { x: number; y: number };
+
 /** Geometry-derived text box; labels never acquire independently persisted coordinates. */
-export function centredRoomLabel(room: RoomFeature): CentredLabel {
+export function centredRoomLabel(
+  room: RoomFeature,
+  viewScale = 1,
+): CentredLabel {
   const inset = Math.min(3, room.width * 0.08, room.height * 0.08);
   return {
     x: room.x + inset,
     y: room.y + inset,
     width: Math.max(0, room.width - inset * 2),
     height: Math.max(0, room.height - inset * 2),
-    fontSize: Math.max(3, Math.min(8, room.height * 0.24, room.width * 0.16)),
+    fontSize: Math.min(
+      Math.max(3, room.height * 0.72),
+      Math.max(
+        11 / viewScale,
+        Math.min(8, room.height * 0.24, room.width * 0.16),
+      ),
+    ),
   };
 }
 
 export function centredConnectorLabel(
   centre: LocalPoint,
   size: number,
+  viewScale = 1,
 ): CentredLabel {
   const inset = Math.min(1.5, size * 0.1);
   return {
@@ -46,7 +64,67 @@ export function centredConnectorLabel(
     y: centre.y - size / 2 + inset,
     width: Math.max(0, size - inset * 2),
     height: Math.max(0, size - inset * 2),
-    fontSize: Math.max(2.5, Math.min(5.5, size * 0.22)),
+    fontSize: Math.min(
+      Math.max(2.5, size * 0.72),
+      Math.max(10 / viewScale, Math.min(5.5, size * 0.22)),
+    ),
+  };
+}
+
+/** Finds a broad interior text box, including for concave building outlines. */
+export function polygonLabelPlacement(
+  polygon: LocalPoint[],
+  viewScale = 1,
+): PolygonLabelPlacement | undefined {
+  if (polygon.length < 3) return undefined;
+  const minX = Math.min(...polygon.map((point) => point.x));
+  const maxX = Math.max(...polygon.map((point) => point.x));
+  const minY = Math.min(...polygon.map((point) => point.y));
+  const maxY = Math.max(...polygon.map((point) => point.y));
+  const step = Math.max(1, Math.min(maxX - minX, maxY - minY) / 30);
+  let anchor: LocalPoint | undefined;
+  let bestClearance = -1;
+  const edges = boundaryEdges(polygon);
+  for (let y = minY; y <= maxY; y += step) {
+    for (let x = minX; x <= maxX; x += step) {
+      const point = { x, y };
+      if (!pointInPolygon(point, polygon)) continue;
+      const clearance = Math.min(
+        ...edges.map((edge) => projectPointToSegment(point, edge).distance),
+      );
+      if (clearance > bestClearance) {
+        anchor = point;
+        bestClearance = clearance;
+      }
+    }
+  }
+  if (!anchor) return undefined;
+  const sampleStep = Math.max(step / 3, 0.25);
+  let left = anchor.x;
+  let right = anchor.x;
+  for (let x = anchor.x; x >= minX; x -= sampleStep) {
+    if (!pointInPolygon({ x, y: anchor.y }, polygon)) break;
+    left = x;
+  }
+  for (let x = anchor.x; x <= maxX; x += sampleStep) {
+    if (!pointInPolygon({ x, y: anchor.y }, polygon)) break;
+    right = x;
+  }
+  const width = Math.max(sampleStep, (right - left) * 0.92);
+  const height = Math.max(
+    sampleStep,
+    Math.min(bestClearance * 1.5, width * 0.2),
+  );
+  return {
+    x: anchor.x - width / 2,
+    y: anchor.y - height / 2,
+    width,
+    height,
+    fontSize: Math.min(
+      Math.max(3, height * 0.72),
+      14 / viewScale,
+      width * 0.08,
+    ),
   };
 }
 
@@ -219,6 +297,32 @@ export function doorLocalPoint(
   return {
     x: segment.start.x + (segment.end.x - segment.start.x) * position,
     y: segment.start.y + (segment.end.y - segment.start.y) * position,
+  };
+}
+
+export function doorDisplayGeometry(
+  door: DoorFeature,
+  layout: Pick<
+    FloorLayout,
+    "boundary" | "features" | "localWidth" | "localHeight"
+  >,
+): DoorDisplayGeometry | undefined {
+  const point = doorLocalPoint(door, layout);
+  const segment = doorParentSegment(door.parent, layout);
+  if (!point || !segment) return undefined;
+  return {
+    point,
+    rotation:
+      (Math.atan2(
+        segment.end.y - segment.start.y,
+        segment.end.x - segment.start.x,
+      ) *
+        180) /
+      Math.PI,
+    leafLength: Math.max(
+      3,
+      Math.min(8, Math.min(layout.localWidth, layout.localHeight) * 0.08),
+    ),
   };
 }
 

@@ -207,10 +207,6 @@ export function Editor() {
   const [selectedMessage, setSelectedMessage] = useState<VisitorMessage>();
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [linkExit, setLinkExit] = useState<{
-    featureId: string;
-    name: string;
-  }>();
 
   useEffect(() => {
     if (!token) return;
@@ -300,10 +296,10 @@ export function Editor() {
     let number = 0;
     while (used.has(number)) number++;
     setLayout(defaultLayout(buildingId, number));
-    setStatus(`New floor ${number}; save it as a draft when ready.`);
+    setStatus(`New floor ${number}. Save to make it available to visitors.`);
   }
 
-  async function save(next: FloorLayout, target: "draft" | "published") {
+  async function save(next: FloorLayout) {
     if (!next.buildingId) {
       setError("Choose a mapped building first.");
       return false;
@@ -312,36 +308,49 @@ export function Editor() {
       const result = await api.editor<{ version: number }>(
         `/floors/${encodeURIComponent(`${next.buildingId}:${next.floor}`)}`,
         token!,
-        { method: "PUT", body: JSON.stringify(floorPayload(next, target)) },
+        {
+          method: "PUT",
+          body: JSON.stringify(floorPayload(next, "published")),
+        },
       );
-      const saved = { ...next, status: target, version: result.version };
+      const saved = {
+        ...next,
+        status: "published" as const,
+        version: result.version,
+      };
       setLayout(saved);
-      setStatus(
-        target === "draft"
-          ? "Draft saved and reloadable."
-          : "Published floor saved.",
-      );
+      setStatus("Floor saved and available to visitors.");
       setError("");
       const list = await api.editor<{ floors: FloorSummary[] }>(
         `/floors?buildingId=${encodeURIComponent(next.buildingId)}`,
         token!,
       );
       setFloors(list.floors);
-      return true;
+      return;
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Floor could not be saved",
       );
-      return false;
     }
   }
 
-  async function beginExitLink(door: DoorFeature) {
-    const saved = await save(layout, "draft");
-    if (!saved) return;
-    setLinkExit({ featureId: door.id, name: door.name });
-    setTab("outdoor");
-    setStatus("Choose a verified main-path node for the exit.");
+  async function deleteMessage(message: VisitorMessage) {
+    if (!window.confirm("Delete this visitor message?")) return;
+    try {
+      await api.editor(`/messages/${encodeURIComponent(message.id)}`, token!, {
+        method: "DELETE",
+      });
+      setMessages((current) =>
+        current.filter((item) => item.id !== message.id),
+      );
+      if (selectedMessage?.id === message.id) setSelectedMessage(undefined);
+      setStatus("Visitor message deleted.");
+      setError("");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Message could not be deleted",
+      );
+    }
   }
 
   return (
@@ -391,18 +400,7 @@ export function Editor() {
         </div>
       )}
       <div className="editor-content">
-        {tab === "outdoor" && (
-          <OutdoorEditor
-            token={token}
-            linkExit={linkExit}
-            onExitLinked={() => {
-              setLinkExit(undefined);
-              void loadFloor(`${layout.buildingId}:${layout.floor}`).then(() =>
-                setTab("floor"),
-              );
-            }}
-          />
-        )}
+        {tab === "outdoor" && <OutdoorEditor token={token} />}
         {tab === "floor" && (
           <section className="floor-workspace">
             <aside className="building-picker">
@@ -445,8 +443,8 @@ export function Editor() {
                     <button onClick={addFloor}>+ Add floor</button>
                   </div>
                   <p className="muted">
-                    Editing {selectedBuilding?.name ?? buildingId}. Drafts
-                    remain private until published.
+                    Editing {selectedBuilding?.name ?? buildingId}. Saved layout
+                    changes are public.
                   </p>
                 </>
               )}
@@ -463,9 +461,8 @@ export function Editor() {
                 <FloorCanvas
                   value={layout}
                   onChange={setLayout}
-                  onSaveDraft={(value) => void save(value, "draft")}
-                  onPublish={(value) => void save(value, "published")}
-                  onLinkExit={(door) => void beginExitLink(door)}
+                  buildingName={selectedBuilding?.name}
+                  onSave={(value) => void save(value)}
                 />
               </div>
             )}
@@ -491,20 +488,30 @@ export function Editor() {
             <div className="message-list">
               <h2>Visitor messages</h2>
               {messages.map((message) => (
-                <button
-                  key={message.id}
-                  className={
-                    selectedMessage?.id === message.id ? "selected" : ""
-                  }
-                  onClick={() => setSelectedMessage(message)}
-                >
-                  <b>
-                    {message.latitude.toFixed(6)},{" "}
-                    {message.longitude.toFixed(6)}
-                  </b>
-                  <span>{message.description}</span>
-                  <small>{new Date(message.created_at).toLocaleString()}</small>
-                </button>
+                <article key={message.id} className="visitor-message-card">
+                  <button
+                    className={
+                      selectedMessage?.id === message.id ? "selected" : ""
+                    }
+                    onClick={() => setSelectedMessage(message)}
+                  >
+                    <b>
+                      {message.latitude.toFixed(6)},{" "}
+                      {message.longitude.toFixed(6)}
+                    </b>
+                    <span>{message.description}</span>
+                    <small>
+                      {new Date(message.created_at).toLocaleString()}
+                    </small>
+                  </button>
+                  <button
+                    type="button"
+                    className="message-delete"
+                    onClick={() => void deleteMessage(message)}
+                  >
+                    Delete
+                  </button>
+                </article>
               ))}
               {messages.length === 0 && <p>No visitor messages yet.</p>}
             </div>

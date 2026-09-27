@@ -1,118 +1,164 @@
-.public-route-panel h2 {
-  margin: 18px 0 12px;
-}
-.public-route-panel .steps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-}
-.public-route-panel .steps button,
-.public-route-panel .steps span {
-  border: 0;
-  border-bottom: 3px solid #d9dfdb;
-  background: transparent;
-  color: #77827b;
-  padding: 8px 5px;
-  text-align: left;
-  font-size: 12px;
-}
-.public-route-panel .steps .active {
-  border-color: #c58d26;
-  color: #5f4210;
-}
-.public-route-panel .steps .done {
-  border-color: #167055;
-  color: #16543f;
-}
-.confirmed-summary {
-  display: grid;
-  gap: 6px;
-  margin-top: 12px;
-}
-.confirmed-summary > div {
+.public-modes {
   display: flex;
-  justify-content: space-between;
   gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #edf6f1;
+  padding: 0 18px 12px;
+  border-bottom: 1px solid #dce3de;
 }
-.confirmed-summary span {
-  display: grid;
-  font-size: 13px;
-}
-.confirmed-summary b {
-  color: #456257;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.confirmed-summary button,
-.gps-button,
-.note-toggle {
+.public-modes button {
+  min-width: 112px;
+  min-height: 42px;
+  padding: 8px 14px;
   border: 1px solid #b7c4bb;
+  border-radius: 8px;
   background: white;
-  border-radius: 7px;
-  padding: 7px 9px;
   color: #16543f;
+  font-weight: 700;
 }
-.search-results button > span:first-child {
-  display: grid;
+.public-modes button.active {
+  border-color: #163f34;
+  background: #163f34;
+  color: white;
 }
-.search-results button small {
-  text-transform: capitalize;
+.public-route-panel h2 {
+  margin: 4px 0 14px;
 }
+.public-route-panel h3 {
+  margin: 4px 0 8px;
+}
+.public-route-panel .field small {
+  float: right;
+  color: #65746c;
+  font-size: 11px;
+  font-weight: 500;
+}
+.feature-detail,
 .selection-card {
   margin: 12px 0;
-  padding: 13px;
-  border-radius: 10px;
-  border: 1px solid #d7b66d;
+  padding: 12px;
+  border: 1px solid #d5ddd7;
+  border-radius: 9px;
+  background: #f7faf8;
+}
+.feature-detail p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.building-view-card {
   background: #fffaf0;
+  border-color: #ddc98f;
 }
-.selection-card h3 {
+.route-location {
+  margin: 10px 0;
+}
+.route-location .field input {
+  min-height: 42px;
+}
+.profiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 14px 0;
+}
+.profiles button {
+  min-height: 40px;
+  padding: 7px 5px;
+  border: 1px solid #b7c4bb;
+  border-radius: 7px;
+  background: white;
+  color: #40574d;
+  font-size: 12px;
+}
+.profiles button.selected {
+  border-color: #147256;
+  background: #eaf5ef;
+  color: #124b39;
+  font-weight: 750;
+}
+.gps-button,
+.quiet {
+  min-height: 38px;
   margin: 5px 0;
+  padding: 7px 10px;
+  border: 1px solid #b7c4bb;
+  border-radius: 7px;
+  background: white;
+  color: #16543f;
 }
-.selection-card p {
-  margin: 4px 0 9px;
-  font-size: 13px;
-  color: #56645d;
+.full {
+  width: 100%;
 }
 .selection-kicker {
   color: #815e17;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 750;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
 }
-.selection-warning {
-  color: #9a332c !important;
+.send-note-panel textarea {
+  min-height: 130px;
+  resize: vertical;
 }
-.gps-button {
-  width: 100%;
-  margin: 5px 0;
-}
-.map-note {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid #dce3de;
-}
-.note-toggle {
-  width: 100%;
-}
-.approach-cancel {
-  border: 1px solid #a66b13;
+.location-selected {
+  padding: 10px;
   border-radius: 7px;
-  background: #fff;
-  color: #70430b;
-  padding: 7px 9px;
+  background: #edf6f1;
+  color: #16543f;
+  font-weight: 700;
 }
-.route-controls .back,
-.choice-step > .back {
-  margin-top: 8px;
+.success-message {
+  padding: 10px;
+  border-left: 3px solid #176b51;
+  background: #edf7f2;
+}
+.notice,
+.route-note {
+  margin: 9px 0;
+  padding: 9px 10px;
+  border-left: 3px solid #0f766e;
+  border-radius: 4px;
+  background: #eef7f5;
+  color: #334a43;
+  font-size: 13px;
+}
+.route-note {
+  border-left-color: #c0841a;
+  background: #fff8e8;
+}
+.search-results {
+  max-height: 220px;
+  overflow: auto;
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #d5ddd7;
+  border-radius: 7px;
+}
+.search-results button {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid #e2e8e3;
+  background: white;
+  text-align: left;
+}
+.public-route-panel .error {
+  overflow-wrap: anywhere;
 }
 @media (max-width: 760px) {
-  .public-route-panel .steps button,
-  .public-route-panel .steps span {
+  .public-modes {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    padding: 8px 10px;
+    background: #fff;
+  }
+  .public-modes button {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 4px;
+  }
+  .profiles button {
     font-size: 11px;
   }
 }

@@ -15,8 +15,8 @@ import type {
   LonLat,
   OsmBuildingCandidate,
   OsmPathCandidate,
-  OsmReviewDecision,
 } from "./osm/types.js";
+import { validCampusLine } from "./paths.js";
 import { editorRoutes } from "./routes/editor.js";
 import {
   publicRoutes,
@@ -35,6 +35,7 @@ import {
   edgeEligibleForProfile,
   edgeIsRoutable,
 } from "./routing/graph.js";
+import { splitEdgesAtSavedJunctions } from "./routing/split-paths.js";
 import type { RouteEdge, RouteNode, TravelProfile } from "./routing/types.js";
 
 type Endpoint =
@@ -42,21 +43,17 @@ type Endpoint =
   | {
       kind: "building";
       buildingId: string;
-      floor: number;
-      exitDoorId?: string;
-      entranceDoorId?: string;
-      roomId?: string;
       approachCoordinates?: LonLat;
     };
 
 const noRouteMessage: Record<NoRouteCode, string> = {
   NO_WALKABLE_GRAPH: "No mapped walking paths are available in this area yet.",
   START_UNREACHABLE:
-    "No mapped walking path can be reached from this start; adjust the point or exit side.",
+    "No mapped walking path can be reached from this start; adjust the point.",
   DEST_UNREACHABLE:
-    "No mapped walking path reaches this destination; adjust the point or entrance side.",
+    "No mapped walking path reaches this destination; adjust the point.",
   NO_PLAUSIBLE_APPROACH:
-    "Choose an entrance/exit side on the building boundary to continue.",
+    "No nearby mapped walking path reaches an approach to this building.",
   DIFFERENT_COMPONENTS:
     "The mapped walking paths do not connect these points yet.",
   BLOCKED_OR_INELIGIBLE: "No available route for this profile right now.",
@@ -95,20 +92,20 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
     const profile = raw.profile as TravelProfile;
     const start = raw.start as Endpoint;
     const destination = raw.destination as Endpoint;
-    const [nodeRows, edgeRows, candidateRows, buildingRows, blockRows] =
+    const [nodeRows, edgeRows, candidateRows, buildingRows, snapRows] =
       await Promise.all([
         db.query("SELECT id,longitude,latitude FROM route_nodes"),
         db.query(
-          "SELECT id,from_node_id,to_node_id,coordinates,kind,verified,blocked,one_way,source_osm_id FROM route_edges WHERE verified AND published",
+          "SELECT id,from_node_id,to_node_id,coordinates,kind,blocked,one_way,source_osm_id,name,note,version FROM route_edges",
         ),
         db.query(
-          "SELECT id,source_way_id,source_node_ids,coordinates,tags,reviewer_decision FROM osm_candidates",
+          "SELECT id,source_way_id,source_node_ids,coordinates,tags,reviewer_decision,provisional_exclusion_reason,blocked,note,version FROM osm_candidates",
         ),
         db.query(
           "SELECT id,name,source_osm_id,footprint,mapped_level_count FROM buildings",
         ),
         db.query(
-          "SELECT a.id,a.active,COALESCE(array_agg(are.route_edge_id) FILTER (WHERE are.route_edge_id IS NOT NULL),'{}') edge_ids FROM alerts a LEFT JOIN alert_route_edges are ON are.alert_id=a.id GROUP BY a.id",
+          "SELECT * FROM path_snap_connections ORDER BY parent_feature_id,parent_segment_index,parent_segment_fraction",
         ),
       ]);
 
@@ -121,31 +118,87 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
         footprint: polygonFeature(row.footprint, row.id),
       }),
     );
-    const decisions = new Map<string, OsmReviewDecision | null>(
-      candidateRows.rows.map((row) => [
-        row.source_way_id,
-        row.reviewer_decision,
-      ]),
-    );
     const candidates: OsmPathCandidate[] = candidateRows.rows.map((row) => ({
       id: row.id,
       sourceWayId: row.source_way_id,
       orderedNodeIds: row.source_node_ids,
       coordinates: row.coordinates,
       tags: row.tags ?? {},
-      barrierNodeIds: [],
+      barrierNodeIds:
+        row.provisional_exclusion_reason === "blocked_by_barrier"
+          ? ["legacy-barrier-exclusion"]
+          : [],
       importStatus: "imported",
       reviewerDecision: row.reviewer_decision ?? "pending",
+      blocked: row.blocked,
+      note: row.note,
+      version: row.version,
       geometry: {
         type: "Feature",
-        properties: { sourceOsmWayId: row.source_way_id, referenceOnly: true },
+        properties: { sourceOsmWayId: row.source_way_id },
         geometry: { type: "LineString", coordinates: row.coordinates },
       },
     }));
+    const promotedByWay = new Map(
+      edgeRows.rows
+        .filter((row) => row.source_osm_id)
+        .map((row) => [row.source_osm_id as string, row]),
+    );
+    const graphCandidates = candidates.map((candidate) => {
+      const promoted = promotedByWay.get(candidate.sourceWayId);
+      return promoted
+        ? {
+            ...candidate,
+            blocked: promoted.blocked,
+            note: promoted.note,
+            version: promoted.version,
+          }
+        : candidate;
+    });
+    const activeSnapRows = snapRows.rows.filter((snap) => {
+      if (snap.parent_source === "editor") {
+        const parent = edgeRows.rows.find(
+          (edge) => edge.id === snap.parent_feature_id,
+        );
+        return parent?.version === snap.parent_version;
+      }
+      const way = String(snap.parent_feature_id).replace(/^osm-/, "");
+      const promoted = edgeRows.rows.find((edge) => edge.source_osm_id === way);
+      const candidate = candidateRows.rows.find(
+        (row) => row.source_way_id === way,
+      );
+      return (promoted?.version ?? candidate?.version) === snap.parent_version;
+    });
+    const validShortcutIds = new Set(
+      [...new Set(activeSnapRows.map((snap) => snap.shortcut_path_id))].filter(
+        (id) =>
+          activeSnapRows.filter((snap) => snap.shortcut_path_id === id)
+            .length === 2,
+      ),
+    );
+    const osmJunctions = activeSnapRows
+      .filter((row) => row.parent_source === "osm")
+      .map((row) => {
+        const way = row.parent_feature_id.replace(/^osm-/, "");
+        const node = nodeRows.rows.find(
+          (item) => item.id === row.junction_node_id,
+        );
+        return {
+          sourceWayId: way,
+          segmentIndex: row.parent_segment_index,
+          segmentFraction: row.parent_segment_fraction,
+          node: {
+            id: row.junction_node_id,
+            coordinates: (node
+              ? [node.longitude, node.latitude]
+              : row.coordinates) as LonLat,
+          },
+        };
+      });
     const provisional = buildProvisionalOsmGraph({
-      candidates,
+      candidates: graphCandidates,
       buildings: buildingModels,
-      decisions,
+      junctions: osmJunctions,
     });
     let nodes: RouteNode[] = [
       ...nodeRows.rows.map((row) => ({
@@ -160,33 +213,49 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
       duplicateNodeIds.add(node.id);
       return true;
     });
-    let edges: RouteEdge[] = [
-      ...edgeRows.rows.map((row) => ({
+    const editorEdges: RouteEdge[] = edgeRows.rows
+      .filter(
+        (row) =>
+          !row.source_osm_id &&
+          validCampusLine(row.coordinates) &&
+          (row.kind !== "shortcut" || validShortcutIds.has(row.id)),
+      )
+      .map((row) => ({
         id: row.id,
+        parentFeatureId: row.id,
         fromNodeId: row.from_node_id,
         toNodeId: row.to_node_id,
         coordinates: row.coordinates,
         kind: row.kind,
-        verified: true,
+        verified: false,
         status: "confirmed" as const,
         source: "editor" as const,
         blocked: row.blocked,
         oneWay: row.one_way,
         sourceOsmId: row.source_osm_id,
+        name: row.name,
+        note: row.note,
+        version: row.version,
+      }));
+    const editorJunctions = activeSnapRows
+      .filter((row) => row.parent_source === "editor")
+      .map((row) => ({
+        parentFeatureId: row.parent_feature_id as string,
+        parentSegmentIndex: row.parent_segment_index as number,
+        parentSegmentFraction: row.parent_segment_fraction as number,
+        junctionNodeId: row.junction_node_id as string,
+        coordinates: row.coordinates as LonLat,
+      }));
+    const splitEditor = splitEdgesAtSavedJunctions(
+      editorEdges,
+      nodeRows.rows.map((row) => ({
+        id: row.id,
+        coordinates: [row.longitude, row.latitude] as LonLat,
       })),
-      ...provisional.edges,
-    ];
-    const activeBlocks = blockRows.rows.map((row) => ({
-      active: row.active,
-      edgeIds: row.edge_ids,
-    }));
-    const blockedIds = new Set<string>();
-    for (const edge of edges) if (edge.blocked) blockedIds.add(edge.id);
-    for (const block of activeBlocks)
-      if (block.active) for (const id of block.edgeIds) blockedIds.add(id);
-    edges = edges.map((edge) =>
-      blockedIds.has(edge.id) ? { ...edge, blocked: true } : edge,
+      editorJunctions,
     );
+    let edges: RouteEdge[] = [...splitEditor.edges, ...provisional.edges];
+    nodes = [...splitEditor.nodes, ...nodes];
 
     const notices: string[] = [];
     const snaps: Array<{
@@ -217,43 +286,21 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
     )
       return fail("NO_WALKABLE_GRAPH");
 
-    async function addVerticalAccessNotice(
-      endpoint: Extract<Endpoint, { kind: "building" }>,
-    ) {
-      if (endpoint.floor === 0) return;
-      const connectors = await db.query(
-        "SELECT kind,connector_id,served_floors FROM floor_features ff JOIN floors f ON f.id=ff.floor_id WHERE f.building_id=$1 AND ff.status='published' AND f.status='published' AND kind IN ('lift','stairs')",
-        [endpoint.buildingId],
+    async function addBuildingAccessNotice(buildingId: string) {
+      if (profile !== "wheelchair") return;
+      const result = await db.query(
+        `SELECT EXISTS(SELECT 1 FROM floors WHERE building_id=$1 AND floor_number=0) AS ground_floor_saved,
+          EXISTS(SELECT 1 FROM floor_features ff JOIN floors f ON f.id=ff.floor_id WHERE f.building_id=$1 AND f.floor_number=0 AND ff.kind='lift') AS has_lift`,
+        [buildingId],
       );
-      const serves = (kind: string) =>
-        connectors.rows.some(
-          (item) =>
-            item.kind === kind &&
-            Array.isArray(item.served_floors) &&
-            item.served_floors.includes(endpoint.floor),
-        );
-      const lift = serves("lift"),
-        stairs = serves("stairs");
-      if (profile === "wheelchair")
-        notices.push(
-          lift
-            ? "A published lift marker serves the selected floor; provisional outdoor accessibility is still unverified."
-            : "Lift access for the selected floor is not mapped; verify accessibility before travel.",
-        );
-      else if (profile === "heavy_luggage")
-        notices.push(
-          lift
-            ? "A mapped lift serves the selected floor and is preferred."
-            : stairs
-              ? "Only mapped stairs serve this floor; heavy luggage may be difficult."
-              : "Vertical access for this floor is not mapped.",
-        );
-      else
-        notices.push(
-          lift || stairs
-            ? `Mapped vertical access: ${[lift && "lift", stairs && "stairs"].filter(Boolean).join(" and ")}.`
-            : "Vertical access for this floor is not mapped.",
-        );
+      const access = result.rows[0];
+      notices.push(
+        !access?.ground_floor_saved
+          ? "Lift information is not available for this building."
+          : access.has_lift
+            ? "Lift available."
+            : "No lift is recorded in this building. Access to upper floors may be limited.",
+      );
     }
 
     function splitAt(snap: SegmentSnap, role: "start" | "destination") {
@@ -309,26 +356,8 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
         return { nodeId: splitAt(snap, role) };
       }
 
-      await addVerticalAccessNotice(endpoint);
-      const requestedDoorId =
-        role === "start" ? endpoint.exitDoorId : endpoint.entranceDoorId;
-      const door = await db.query(
-        `SELECT ff.id,ff.linked_graph_node_id FROM floor_features ff JOIN floors f ON f.id=ff.floor_id
-         JOIN route_nodes n ON n.id=ff.linked_graph_node_id
-         WHERE f.building_id=$1 AND f.floor_number=0 AND ff.kind='door' AND ff.is_exit
-         AND ff.status='published' AND f.status='published' AND ff.outdoor_position IS NOT NULL
-         AND ff.geometry->'parent'->>'kind'='exterior'
-         AND EXISTS (SELECT 1 FROM route_edges e WHERE e.kind='main' AND e.verified AND e.published AND (e.from_node_id=n.id OR e.to_node_id=n.id))
-         AND ($2::text IS NULL OR ff.id=$2) ORDER BY ff.id LIMIT 1`,
-        [endpoint.buildingId, requestedDoorId ?? null],
-      );
-      if (door.rowCount && nodeMap.has(door.rows[0].linked_graph_node_id)) {
-        return {
-          nodeId: door.rows[0].linked_graph_node_id,
-          selectedDoorId: door.rows[0].id,
-        };
-      }
-
+      if (role === "destination")
+        await addBuildingAccessNotice(endpoint.buildingId);
       const building = buildingModels.find(
         (item) => item.id === endpoint.buildingId,
       );
@@ -339,13 +368,23 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
           edgeEligibleForProfile(edge, profile) &&
           !edge.blocked,
       );
+      const savedDoor = await db.query(
+        `SELECT outdoor_position FROM floor_features ff JOIN floors f ON f.id=ff.floor_id
+         WHERE f.building_id=$1 AND f.floor_number=0 AND ff.kind='door'
+           AND ff.outdoor_position IS NOT NULL
+         ORDER BY CASE WHEN $2='start' AND ff.is_exit THEN 0 ELSE 1 END,ff.id LIMIT 1`,
+        [endpoint.buildingId, role],
+      );
+      const preferredBoundary =
+        endpoint.approachCoordinates ??
+        (savedDoor.rows[0]?.outdoor_position as LonLat | undefined);
       const approach = suggestBuildingApproach({
         buildingId: endpoint.buildingId,
         footprint: building.footprint,
         allFootprints: buildingModels.map((item) => item.footprint),
         edges: routableEdges,
         nodes: nodeMap,
-        requestedBoundary: endpoint.approachCoordinates,
+        requestedBoundary: preferredBoundary,
         maxGapMetres: 30,
       });
       if (!approach) return { code: "NO_PLAUSIBLE_APPROACH" };
@@ -356,9 +395,7 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
         network: [...approach.network],
         approximate: true,
       });
-      notices.push(
-        `${role === "start" ? "Exit" : "Entrance"} is an approximate building-boundary approach; the ${role === "start" ? "exit" : "entrance"} is unconfirmed.`,
-      );
+      notices.push("Building approach.");
       return { nodeId: splitAt(approach.snap, role), approach };
     }
 
@@ -389,56 +426,18 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
         : fail("BLOCKED_OR_INELIGIBLE");
     }
 
-    const containsProvisional =
-      route.segments.some((segment) => segment.status === "provisional") ||
-      approaches.length > 0;
-    if (containsProvisional)
-      notices.unshift(
-        "Suggested route based on map data; paths and accessibility have not been field-verified.",
-      );
     notices.push(
       ...snaps.map(
-        (snap) =>
-          `A selected outdoor point was snapped ${snap.distanceMetres.toFixed(1)} m to the mapped path; the correction is shown on the map.`,
+        () =>
+          "The selected location was adjusted to the nearest connected path.",
       ),
     );
-    const approachGeometry = (from: LonLat, to: LonLat): LineString => ({
-      type: "LineString",
-      coordinates: [[...from], [...to]],
-    });
-    const segments = [
-      ...(startResolution.approach
-        ? [
-            {
-              geometry: approachGeometry(
-                startResolution.approach.boundary,
-                startResolution.approach.network,
-              ),
-              source: "approach" as const,
-              confidence: "approximate" as const,
-            },
-          ]
-        : []),
-      ...route.segments.map((segment) => ({
-        geometry: segment.geometry as LineString,
-        source:
-          segment.source === "osm" ? ("osm" as const) : ("editor" as const),
-        confidence: segment.status,
-        sourceId: segment.sourceOsmId ?? segment.edgeId,
-      })),
-      ...(destinationResolution.approach
-        ? [
-            {
-              geometry: approachGeometry(
-                destinationResolution.approach.network,
-                destinationResolution.approach.boundary,
-              ),
-              source: "approach" as const,
-              confidence: "approximate" as const,
-            },
-          ]
-        : []),
-    ];
+    const segments = route.segments.map((segment) => ({
+      geometry: segment.geometry as LineString,
+      pathId: segment.pathId,
+      kind: segment.kind,
+      note: segment.note,
+    }));
     return {
       status: "ok" as const,
       geometry: joinRouteGeometry(
@@ -448,12 +447,7 @@ function createRouteResolver(db: Database, config: Config): RouteResolver {
       ),
       segments,
       approaches,
-      containsProvisional,
       notices,
-      selectedEntranceDoorId:
-        destination.kind === "building"
-          ? destinationResolution.selectedDoorId
-          : undefined,
       snaps,
     };
   };

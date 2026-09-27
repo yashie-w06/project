@@ -80,6 +80,17 @@
 .message-list button span {
   text-align: left;
 }
+.visitor-message-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
+}
+.message-list .message-delete {
+  display: block;
+  color: #a12d25;
+  padding: 8px;
+}
 @media (max-width: 850px) {
   .floor-workspace,
   .message-workspace {

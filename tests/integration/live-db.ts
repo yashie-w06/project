@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { loadConfig } from "../../apps/api/src/config.js";
 import { createDatabase } from "../../apps/api/src/db.js";
@@ -10,13 +11,13 @@ const nodeA = `${prefix}-a`,
   nodeC = `${prefix}-c`;
 const mainAB = `${prefix}-main-ab`,
   mainBC = `${prefix}-main-bc`,
-  shortcut = `${prefix}-shortcut`;
+  shortcut = randomUUID();
 const pointId = `${prefix}-point`;
 const floorId = `${prefix}-floor`;
 const messageText = `${prefix} visitor message`;
-const a: [number, number] = [75.871, 22.726],
-  b: [number, number] = [75.8711, 22.726],
-  c: [number, number] = [75.8712, 22.726];
+const a: [number, number] = [75.8671, 22.7221],
+  b: [number, number] = [75.8672, 22.7221],
+  c: [number, number] = [75.8673, 22.7221];
 const config = loadConfig();
 let db = createDatabase(config);
 let alertId: string | undefined;
@@ -76,26 +77,17 @@ try {
         floor: 0,
       },
     });
-  assert.equal(provisionalCampusRoute.body.status, "ok");
-  assert.equal(provisionalCampusRoute.body.containsProvisional, true);
-  assert.equal(provisionalCampusRoute.body.approaches.length, 2);
-  assert.deepEqual(
-    provisionalCampusRoute.body.segments
-      .filter((segment: { source: string }) => segment.source === "osm")
-      .map((segment: { sourceId: string }) => segment.sourceId),
-    ["202920189", "202920186"],
-  );
-  assert.match(
-    provisionalCampusRoute.body.notices.join(" "),
-    /not been field-verified/i,
-  );
+  assert.equal(provisionalCampusRoute.body.status, "no_route");
+  assert.equal(provisionalCampusRoute.body.code, "DIFFERENT_COMPONENTS");
+  assert.equal(provisionalCampusRoute.body.approaches, undefined);
+  assert.match(provisionalCampusRoute.body.message, /do not connect/);
   await db.query(
     "INSERT INTO route_nodes(id,longitude,latitude) VALUES($1,$2,$3),($4,$5,$6),($7,$8,$9)",
     [nodeA, ...a, nodeB, ...b, nodeC, ...c],
   );
   await db.query(
     `INSERT INTO route_edges(id,from_node_id,to_node_id,coordinates,kind,verified,published) VALUES
-    ($1,$2,$3,$4,'main',true,true),($5,$3,$6,$7,'main',true,true),($8,$2,$6,$9,'shortcut',true,true)`,
+    ($1,$2,$3,$4,'main',true,true),($5,$3,$6,$7,'main',true,true)`,
     [
       mainAB,
       nodeA,
@@ -104,8 +96,6 @@ try {
       mainBC,
       nodeC,
       JSON.stringify([b, c]),
-      shortcut,
-      JSON.stringify([a, c]),
     ],
   );
   let app = createApp(config, db);
@@ -124,49 +114,44 @@ try {
   assert.equal(login.status, 200);
   const token = login.body.token as string;
   const auth = { Authorization: `Bearer ${token}` };
-  const route = async (profile: string) =>
-    request(app)
-      .post("/api/route")
-      .send({
-        profile,
-        start: { kind: "outdoor", coordinates: a },
-        destination: { kind: "outdoor", coordinates: c },
-      });
-  const healthy = await route("healthy"),
-    wheelchair = await route("wheelchair"),
-    luggage = await route("heavy_luggage");
-  assert.equal(healthy.body.status, "ok");
-  assert.equal(wheelchair.body.status, "ok");
-  assert.equal(luggage.body.status, "ok");
-  assert.equal(healthy.body.geometry.coordinates.length, 2);
-  assert.equal(luggage.body.geometry.coordinates.length, 2);
-  assert.equal(wheelchair.body.geometry.coordinates.length, 3);
-  const sameEdge = await request(app)
-    .post("/api/route")
+  const createdShortcut = await request(app)
+    .post("/api/editor/paths")
+    .set(auth)
     .send({
-      profile: "wheelchair",
-      start: { kind: "outdoor", coordinates: [75.87102, 22.726] },
-      destination: { kind: "outdoor", coordinates: [75.87108, 22.726] },
+      id: shortcut,
+      coordinates: [a, c],
+      endpoints: [
+        { parentId: mainAB, coordinates: a, parentVersion: 1 },
+        { parentId: mainBC, coordinates: c, parentVersion: 1 },
+      ],
     });
-  assert.equal(sameEdge.body.status, "ok");
-  assert.ok(sameEdge.body.geometry.coordinates.length >= 2);
-  assert.deepEqual(
-    sameEdge.body.geometry.coordinates[0],
-    sameEdge.body.snaps[0].snapped,
+  assert.equal(
+    createdShortcut.status,
+    201,
+    JSON.stringify(createdShortcut.body),
   );
-  assert.deepEqual(
-    sameEdge.body.geometry.coordinates.at(-1),
-    sameEdge.body.snaps[1].snapped,
+  const persistedShortcut = await db.query(
+    "SELECT e.id,e.from_node_id,e.to_node_id,e.coordinates,s.parent_feature_id,s.parent_source,s.parent_version,s.junction_node_id FROM route_edges e LEFT JOIN path_snap_connections s ON s.shortcut_path_id=e.id WHERE e.id=$1 ORDER BY s.endpoint_index",
+    [shortcut],
   );
+  assert.equal(persistedShortcut.rowCount, 2);
+  assert.ok(persistedShortcut.rows.every((row) => row.parent_version === 1));
   const message = await request(app)
     .post("/api/messages")
     .send({ coordinates: b, description: messageText });
   assert.equal(message.status, 201);
   const listed = await request(app).get("/api/editor/messages").set(auth);
-  assert.ok(
-    listed.body.messages.some(
-      (entry: { description: string }) => entry.description === messageText,
-    ),
+  const savedMessage = listed.body.messages.find(
+    (entry: { description: string }) => entry.description === messageText,
+  );
+  assert.ok(savedMessage);
+  assert.equal(
+    (
+      await request(app)
+        .delete(`/api/editor/messages/${savedMessage.id}`)
+        .set(auth)
+    ).status,
+    204,
   );
   const alert = await request(app)
     .post("/api/editor/alerts")
@@ -178,24 +163,29 @@ try {
     });
   assert.equal(alert.status, 201);
   alertId = alert.body.id;
-  const blocked = await route("healthy");
-  assert.equal(blocked.body.geometry.coordinates.length, 3);
-  await request(app)
-    .patch(`/api/editor/alerts/${alertId}/active`)
+  const blockedShortcut = await request(app)
+    .patch(`/api/editor/paths/${shortcut}`)
     .set(auth)
-    .send({ active: false });
-  const unblocked = await route("healthy");
-  assert.equal(unblocked.body.geometry.coordinates.length, 2);
+    .send({ blocked: true, version: 1 });
+  assert.equal(blockedShortcut.status, 200);
+  assert.equal(blockedShortcut.body.blocked, true);
+  const unblockedShortcut = await request(app)
+    .patch(`/api/editor/paths/${shortcut}`)
+    .set(auth)
+    .send({ blocked: false, version: 2 });
+  assert.equal(unblockedShortcut.status, 200);
+  assert.equal(unblockedShortcut.body.blocked, false);
   const point = await request(app)
     .put(`/api/editor/points/${pointId}`)
     .set(auth)
     .send({
       name: "Integration point",
       coordinates: b,
-      published: true,
+      note: "Informational campus point",
       version: 1,
     });
   assert.equal(point.status, 200);
+  assert.equal(point.body.description, "Informational campus point");
   const building = (
     await db.query("SELECT id FROM buildings ORDER BY id LIMIT 1")
   ).rows[0].id as string;
@@ -254,10 +244,16 @@ try {
   assert.deepEqual(persisted.rows[0], { point: 1, floor: 1 });
   const publicMap = await request(app).get("/api/map");
   assert.equal(publicMap.status, 200);
-  assert.equal(publicMap.body.provisionalPaths.features.length, 12);
-  assert.equal(publicMap.body.referencePaths.features.length, 3);
+  assert.ok(
+    publicMap.body.paths.features.some(
+      (feature: { properties?: { id?: string } }) =>
+        feature.properties?.id === "osm-202920189",
+    ),
+  );
+  assert.equal("provisionalPaths" in publicMap.body, false);
+  assert.equal("referencePaths" in publicMap.body, false);
   console.log(
-    "Live integration passed: provisional campus route, counts, auth, persistence, restart, profiles, reports, block/unblock.",
+    "Live integration passed: disconnected campus route outcome, unified paths, authenticated shortcut persistence/blocking, point notes, floors, restart persistence and message deletion.",
   );
 } finally {
   await cleanup();

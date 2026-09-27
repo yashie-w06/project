@@ -5,136 +5,80 @@ import { CampusMap } from "../map/CampusMap";
 import type { CampusMapData, Coordinate } from "../types";
 import "./outdoor-editor.css";
 
-type Mode = "select" | "point" | "draw" | "review" | "alert";
+type Mode = "select" | "draw" | "point" | "alert";
+type PathFeature = {
+  id: string;
+  name: string;
+  coordinates: Coordinate[];
+  kind: "main" | "shortcut";
+  source: "osm" | "editor";
+  blocked: boolean;
+  note: string | null;
+  version: number;
+  alertIds?: string[];
+};
+type PathSnap = {
+  parentId: string;
+  parentVersion: number;
+  coordinates: Coordinate;
+  distanceMetres: number;
+  screenPixels: number;
+};
+type DrawVertex = { coordinate: Coordinate; snap?: PathSnap };
+type OutdoorPoint = {
+  id: string;
+  name?: string;
+  coordinates: Coordinate;
+  note: string;
+  version: number;
+};
+type OutdoorAlert = {
+  id: string;
+  coordinates: Coordinate;
+  description: string;
+  version: number;
+  pathIds?: string[];
+};
 type GraphData = {
-  nodes: Array<{
-    id: string;
-    longitude: number;
-    latitude: number;
-    version: number;
-  }>;
-  edges: Array<{
-    id: string;
-    from_node_id: string;
-    to_node_id: string;
-    coordinates: Coordinate[];
-    kind: "main" | "shortcut";
-    verified: boolean;
-    published: boolean;
-    blocked: boolean;
-    source?: "editor" | "osm";
-    status?: "confirmed" | "provisional" | "draft";
-    version: number;
-  }>;
-  candidates: Array<{
-    id: string;
-    source_way_id: string;
-    reviewer_decision?: string;
-    import_status?: string;
-    provisional_eligible?: boolean;
-    provisional_exclusion_reason?: string;
-    status?: string;
-    version: number;
-    coordinates: Coordinate[];
-  }>;
-  points: Array<{
-    id: string;
-    name: string;
-    longitude: number;
-    latitude: number;
-    published: boolean;
-    version: number;
-  }>;
-  alerts: Array<{
-    id: string;
-    description: string;
-    active: boolean;
-    edge_ids: string[];
-  }>;
+  paths: PathFeature[];
+  points: OutdoorPoint[];
+  alerts: OutdoorAlert[];
+};
+type PickMetadata = { snap?: PathSnap };
+type MapData = CampusMapData & {
+  paths?: {
+    type: "FeatureCollection";
+    features: Feature<
+      LineString,
+      Omit<PathFeature, "coordinates" | "version">
+    >[];
+  };
 };
 
-type ExitLinkRequest = { featureId: string; name: string };
+const emptyGraph: GraphData = { paths: [], points: [], alerts: [] };
+const maximumPointNote = 500;
+const maximumPathNote = 240;
+const snapPixelTolerance = 12;
+const snapMetreTolerance = 5;
 
-const modeHelp: Record<Mode, string> = {
-  select: "Click a building or choose an item in the inspector to examine it.",
-  point:
-    "Click the map to place a named outdoor dot, then drag the amber marker if needed.",
-  draw: "Click short connected vertices in order; finish to save a non-routable draft.",
-  review:
-    "Select an OSM reference below to highlight it; review never publishes it.",
-  alert:
-    "Click a location for an alert. Blocking requires explicit route-edge selection.",
-};
-
-function countComponents(data?: GraphData) {
-  if (!data) return 0;
-  const published = data.edges.filter(
-    (edge) => edge.verified && edge.published && !edge.blocked,
-  );
-  const adjacency = new Map<string, Set<string>>();
-  for (const edge of published) {
-    if (!adjacency.has(edge.from_node_id))
-      adjacency.set(edge.from_node_id, new Set());
-    if (!adjacency.has(edge.to_node_id))
-      adjacency.set(edge.to_node_id, new Set());
-    adjacency.get(edge.from_node_id)!.add(edge.to_node_id);
-    adjacency.get(edge.to_node_id)!.add(edge.from_node_id);
-  }
-  let count = 0;
-  const seen = new Set<string>();
-  for (const id of adjacency.keys()) {
-    if (seen.has(id)) continue;
-    count++;
-    const stack = [id];
-    while (stack.length) {
-      const current = stack.pop()!;
-      if (seen.has(current)) continue;
-      seen.add(current);
-      adjacency.get(current)?.forEach((next) => stack.push(next));
-    }
-  }
-  return count;
-}
-
-function candidateStatus(candidate: GraphData["candidates"][number]) {
-  if (candidate.reviewer_decision === "rejected") return "rejected";
-  if (candidate.reviewer_decision === "needs_edit") return "needs_edit";
-  if (candidate.status === "field_verified") return "field_verified";
-  if (candidate.reviewer_decision === "approved") return "approved";
-  if (candidate.status && candidate.status !== "imported")
-    return candidate.status;
-  return "provisional";
-}
-
-export function OutdoorEditor({
-  token,
-  linkExit,
-  onExitLinked,
-}: {
-  token: string;
-  linkExit?: ExitLinkRequest;
-  onExitLinked?: (result: {
-    linkedGraphNodeId: string;
-    outdoorPosition: Coordinate;
-  }) => void;
-}) {
-  const [data, setData] = useState<GraphData>();
-  const [mapData, setMapData] = useState<CampusMapData>();
+export function OutdoorEditor({ token }: { token: string }) {
+  const [data, setData] = useState<GraphData>(emptyGraph);
+  const [mapData, setMapData] = useState<MapData>();
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [mode, setMode] = useState<Mode>("select");
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string>();
-  const [filter, setFilter] = useState("");
-  const [decisionFilter, setDecisionFilter] = useState("all");
+  const [selectedPathId, setSelectedPathId] = useState("");
+  const [blockedChoice, setBlockedChoice] = useState<boolean>();
+  const [pathNote, setPathNote] = useState("");
+  const [vertices, setVertices] = useState<DrawVertex[]>([]);
+  const [saving, setSaving] = useState(false);
   const [pointPosition, setPointPosition] = useState<Coordinate>();
   const [pointName, setPointName] = useState("");
-  const [pointPublished, setPointPublished] = useState(false);
-  const [vertices, setVertices] = useState<Coordinate[]>([]);
-  const [pathKind, setPathKind] = useState<"main" | "shortcut">("main");
-  const [fieldVerified, setFieldVerified] = useState(false);
+  const [pointNote, setPointNote] = useState("");
+  const [selectedPointId, setSelectedPointId] = useState("");
   const [alertPosition, setAlertPosition] = useState<Coordinate>();
-  const [alertText, setAlertText] = useState("");
-  const [blockedEdgeIds, setBlockedEdgeIds] = useState<string[]>([]);
+  const [alertNote, setAlertNote] = useState("");
+  const [selectedAlertId, setSelectedAlertId] = useState("");
 
   const reload = async () => {
     try {
@@ -143,331 +87,362 @@ export function OutdoorEditor({
         api.map(),
       ]);
       setData(graph);
-      setMapData(map);
+      setMapData(map as MapData);
       setError("");
+      return graph;
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
           : "Outdoor data could not be loaded",
       );
+      return undefined;
     }
   };
+
   useEffect(() => {
     void reload();
+    // Refresh after returning to the editor tab and while the editor is open.
+    const refresh = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
   }, [token]);
 
-  const selectedCandidate = data?.candidates.find(
-    (candidate) => candidate.id === selectedCandidateId,
+  const selectedPath = data.paths.find((path) => path.id === selectedPathId);
+  const selectedPoint = data.points.find(
+    (point) => point.id === selectedPointId,
   );
-  const selectedFeature: Feature<LineString> | undefined = selectedCandidate
+  const selectedAlert = data.alerts.find(
+    (alert) => alert.id === selectedAlertId,
+  );
+  const selectedPathFeature: Feature<LineString> | undefined = selectedPath
     ? {
         type: "Feature",
-        properties: { id: selectedCandidate.id },
-        geometry: {
-          type: "LineString",
-          coordinates: selectedCandidate.coordinates,
-        },
+        properties: { id: selectedPath.id },
+        geometry: { type: "LineString", coordinates: selectedPath.coordinates },
       }
     : undefined;
-  const draftFeature: Feature<LineString> | undefined =
+  const pathOptions = useMemo(
+    () =>
+      [...data.paths]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((path, index) => ({
+          ...path,
+          displayName:
+            path.name || `Path ${String(index + 1).padStart(2, "0")}`,
+        })),
+    [data.paths],
+  );
+  const validSnaps = [vertices[0]?.snap, vertices.at(-1)?.snap].every(
+    (snap) =>
+      snap &&
+      snap.screenPixels <= snapPixelTolerance &&
+      snap.distanceMetres <= snapMetreTolerance,
+  );
+  const snapPoints = [
+    vertices[0]?.snap?.coordinates,
+    vertices.at(-1)?.snap?.coordinates,
+  ].filter((coordinate): coordinate is Coordinate => Boolean(coordinate));
+  const drawFeature: Feature<LineString> | undefined =
     vertices.length > 1
       ? {
           type: "Feature",
           properties: {},
-          geometry: { type: "LineString", coordinates: vertices },
+          geometry: {
+            type: "LineString",
+            coordinates: vertices.map((vertex) => vertex.coordinate),
+          },
         }
       : undefined;
-  const filteredCandidates = useMemo(
-    () =>
-      data?.candidates.filter((candidate) => {
-        const decision = candidateStatus(candidate);
-        return (
-          (decisionFilter === "all" || decision === decisionFilter) &&
-          `${candidate.source_way_id} ${decision}`
-            .toLowerCase()
-            .includes(filter.toLowerCase())
-        );
-      }) ?? [],
-    [data, decisionFilter, filter],
-  );
-  const publishedEdges =
-    data?.edges.filter((edge) => edge.verified && edge.published).length ?? 0;
-  const drafts =
-    data?.edges.filter((edge) => !edge.verified || !edge.published).length ?? 0;
-  const blocked = data?.edges.filter((edge) => edge.blocked).length ?? 0;
-  const provisional =
-    data?.candidates.filter(
-      (candidate) =>
-        candidate.provisional_eligible === true &&
-        !["rejected", "needs_edit", "field_verified"].includes(
-          candidateStatus(candidate),
-        ),
-    ).length ?? 0;
-  const pendingMarker =
-    mode === "point"
-      ? pointPosition
-      : mode === "alert"
-        ? alertPosition
-        : vertices.at(-1);
 
-  function onMapPick(coordinate: Coordinate) {
+  function setModeAndClear(next: Mode) {
+    setMode(next);
     setStatus("");
-    if (mode === "point") setPointPosition(coordinate);
-    else if (mode === "draw")
-      setVertices((current) => [...current, coordinate]);
-    else if (mode === "alert") setAlertPosition(coordinate);
+    setError("");
+    if (next !== "draw") setVertices([]);
+    if (next !== "point") setPointPosition(undefined);
+    if (next !== "alert") setAlertPosition(undefined);
   }
-  async function savePoint() {
-    if (!pointPosition || !pointName.trim()) return;
-    try {
-      const id = crypto.randomUUID();
-      await api.editor(`/points/${id}`, token, {
-        method: "PUT",
-        body: JSON.stringify({
-          name: pointName.trim(),
-          coordinates: pointPosition,
-          published: pointPublished,
-          version: 1,
-        }),
-      });
-      setPointName("");
-      setPointPosition(undefined);
-      setStatus(
-        pointPublished
-          ? "Published outdoor point saved."
-          : "Outdoor point saved as a draft.",
-      );
-      await reload();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Point could not be saved",
-      );
+
+  function onMapPick(coordinate: Coordinate, metadata?: PickMetadata) {
+    setError("");
+    setStatus("");
+    if (mode === "draw") {
+      setVertices((current) => [
+        ...current,
+        { coordinate, snap: metadata?.snap },
+      ]);
+    } else if (mode === "point") {
+      setPointPosition(coordinate);
+      setSelectedPointId("");
+    } else if (mode === "alert") {
+      setAlertPosition(coordinate);
+      setSelectedAlertId("");
     }
   }
-  async function savePath(publish: boolean) {
-    if (vertices.length < 2) return;
-    if (publish && !fieldVerified) {
-      setError(
-        "Physical walkability confirmation is required before publishing.",
-      );
-      return;
-    }
-    try {
-      const fromId = crypto.randomUUID(),
-        toId = crypto.randomUUID(),
-        edgeId = crypto.randomUUID();
-      await api.editor(`/nodes/${fromId}`, token, {
-        method: "PUT",
-        body: JSON.stringify({ coordinates: vertices[0], version: 1 }),
-      });
-      await api.editor(`/nodes/${toId}`, token, {
-        method: "PUT",
-        body: JSON.stringify({ coordinates: vertices.at(-1), version: 1 }),
-      });
-      const result = await api.editor<{ warning?: string }>(
-        `/edges/${edgeId}`,
-        token,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            fromNodeId: fromId,
-            toNodeId: toId,
-            coordinates: vertices,
-            kind: pathKind,
-            verified: publish,
-            published: publish,
-            oneWay: false,
-            version: 1,
-          }),
-        },
-      );
-      setVertices([]);
-      setFieldVerified(false);
-      setStatus(
-        result.warning ??
-          (publish
-            ? "Verified connected path published."
-            : "Detached path saved safely as a non-routable draft."),
-      );
-      await reload();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Path could not be saved",
-      );
-    }
+
+  function choosePath(id: string) {
+    setSelectedPathId(id);
+    const path = data.paths.find((item) => item.id === id);
+    setBlockedChoice(path?.blocked ?? false);
+    setPathNote(path?.note ?? "");
+    setSelectedPointId("");
+    setSelectedAlertId("");
+    setStatus("");
   }
-  async function review(decision: "approved" | "rejected" | "needs_edit") {
-    if (!selectedCandidate) return;
+
+  async function savePathStatus() {
+    if (!selectedPath || blockedChoice === undefined) return;
+    setSaving(true);
+    setError("");
     try {
-      await api.editor(`/candidates/${selectedCandidate.id}`, token, {
+      await api.editor(`/paths/${encodeURIComponent(selectedPath.id)}`, token, {
         method: "PATCH",
-        body: JSON.stringify({ decision, version: selectedCandidate.version }),
-      });
-      setStatus(
-        decision === "approved"
-          ? "Reference approved for review only; it was not published."
-          : `Reference marked ${decision.replace("_", " ")}.`,
-      );
-      await reload();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Review could not be saved",
-      );
-    }
-  }
-  async function promote() {
-    if (
-      !selectedCandidate ||
-      !fieldVerified ||
-      !window.confirm(
-        "Publish only if you physically walked and verified the entire candidate. Continue?",
-      )
-    )
-      return;
-    try {
-      await api.editor(`/candidates/${selectedCandidate.id}/promote`, token, {
-        method: "POST",
         body: JSON.stringify({
-          version: selectedCandidate.version,
-          confirmWalkable: true,
+          blocked: blockedChoice,
+          version: selectedPath.version,
         }),
       });
-      setFieldVerified(false);
-      setStatus(
-        "Field-verified candidate published. Verify graph junctions and coverage before public use.",
-      );
       await reload();
+      setStatus(blockedChoice ? "Path blocked." : "Path is good for routing.");
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Candidate could not be published",
+          : "Path status could not be saved",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePathNote(remove = false) {
+    if (!selectedPath) return;
+    const trimmed = remove ? "" : pathNote.trim();
+    if (!remove && (!trimmed || trimmed.length > maximumPathNote)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.editor(`/paths/${encodeURIComponent(selectedPath.id)}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ note: trimmed, version: selectedPath.version }),
+      });
+      const next = await reload();
+      setPathNote(
+        next?.paths.find((path) => path.id === selectedPath.id)?.note ?? "",
+      );
+      setStatus(remove ? "Path note removed." : "Path note saved.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Path note could not be saved",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveDrawnPath() {
+    if (vertices.length < 2 || !validSnaps) return;
+    const first = vertices[0]!.snap!;
+    const last = vertices.at(-1)!.snap!;
+    setSaving(true);
+    setError("");
+    try {
+      await api.editor("/paths", token, {
+        method: "POST",
+        body: JSON.stringify({
+          id: crypto.randomUUID(),
+          coordinates: vertices.map((vertex) => vertex.coordinate),
+          endpoints: [
+            {
+              parentId: first.parentId,
+              parentVersion: first.parentVersion,
+              coordinates: first.coordinates,
+            },
+            {
+              parentId: last.parentId,
+              parentVersion: last.parentVersion,
+              coordinates: last.coordinates,
+            },
+          ],
+        }),
+      });
+      setVertices([]);
+      await reload();
+      setMode("select");
+      setStatus("Shortcut path saved and connected.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Path could not be saved",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePoint() {
+    if (
+      !pointPosition ||
+      !pointNote.trim() ||
+      pointNote.trim().length > maximumPointNote
+    )
+      return;
+    const existing = selectedPoint;
+    const id = existing?.id ?? crypto.randomUUID();
+    setSaving(true);
+    setError("");
+    try {
+      await api.editor(`/points/${encodeURIComponent(id)}`, token, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: pointName.trim() || undefined,
+          coordinates: pointPosition,
+          note: pointNote.trim(),
+          version: existing?.version ?? 1,
+        }),
+      });
+      await reload();
+      setSelectedPointId(id);
+      setPointPosition(undefined);
+      setStatus("Outdoor point saved.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Point could not be saved",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removePoint() {
+    if (!selectedPoint || !window.confirm("Remove this outdoor point?")) return;
+    try {
+      await api.editor(
+        `/points/${encodeURIComponent(selectedPoint.id)}`,
+        token,
+        { method: "DELETE" },
+      );
+      setSelectedPointId("");
+      setPointPosition(undefined);
+      await reload();
+      setStatus("Outdoor point removed.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Point could not be removed",
       );
     }
   }
+
   async function saveAlert() {
-    if (!alertPosition || !alertText.trim()) return;
+    if (
+      !alertPosition ||
+      !alertNote.trim() ||
+      alertNote.trim().length > maximumPointNote
+    )
+      return;
+    setSaving(true);
+    setError("");
     try {
       await api.editor("/alerts", token, {
         method: "POST",
         body: JSON.stringify({
           coordinates: alertPosition,
-          description: alertText.trim(),
-          edgeIds: blockedEdgeIds,
+          description: alertNote.trim(),
         }),
       });
-      setAlertText("");
+      setAlertNote("");
       setAlertPosition(undefined);
-      setBlockedEdgeIds([]);
-      setStatus(
-        blockedEdgeIds.length
-          ? "Blocking alert published for the selected edges."
-          : "Normal alert published; routing is unchanged.",
-      );
       await reload();
+      setStatus("Alert added.");
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Alert could not be saved",
+        cause instanceof Error ? cause.message : "Alert could not be added",
       );
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function linkExitToNode(nodeId: string) {
-    if (!linkExit) return;
+  async function removeAlert(alert: OutdoorAlert) {
+    if (!window.confirm("Remove this alert?")) return;
     try {
-      const result = await api.editor<{
-        linkedGraphNodeId: string;
-        outdoorPosition: Coordinate;
-      }>(
-        `/features/${encodeURIComponent(linkExit.featureId)}/exit-link`,
-        token,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ nodeId }),
-        },
-      );
-      setStatus(
-        `${linkExit.name || "Exit"} is linked to the verified main graph.`,
-      );
-      onExitLinked?.(result);
-      await reload();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Exit could not be linked",
-      );
-    }
-  }
-
-  async function setAlertActive(id: string, active: boolean) {
-    try {
-      await api.editor(`/alerts/${encodeURIComponent(id)}/active`, token, {
-        method: "PATCH",
-        body: JSON.stringify({ active }),
+      await api.editor(`/alerts/${encodeURIComponent(alert.id)}`, token, {
+        method: "DELETE",
       });
-      setStatus(
-        active
-          ? "Alert reactivated."
-          : "Alert resolved; affected routes are available again.",
-      );
+      setSelectedAlertId("");
       await reload();
+      setStatus("Alert removed.");
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Alert could not be updated",
+        cause instanceof Error ? cause.message : "Alert could not be removed",
       );
     }
   }
 
   return (
-    <section className="outdoor-workspace" aria-label="Outdoor graph editor">
+    <section className="outdoor-workspace" aria-label="Outdoor map editor">
       <div
         className="outdoor-toolbar"
         role="toolbar"
         aria-label="Outdoor tools"
       >
-        {(["select", "point", "draw", "review", "alert"] as Mode[]).map(
-          (value) => (
-            <button
-              key={value}
-              className={mode === value ? "active" : ""}
-              onClick={() => {
-                setMode(value);
-                setStatus("");
-              }}
-            >
-              {value === "point"
-                ? "Add point"
-                : value === "draw"
-                  ? "Draw path"
-                  : value === "review"
-                    ? "Review OSM"
-                    : value === "alert"
-                      ? "Alert / block"
-                      : "Select"}
-            </button>
-          ),
-        )}
+        {(
+          [
+            ["select", "Select"],
+            ["draw", "Draw path"],
+            ["point", "Add point"],
+            ["alert", "Add alert"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            className={mode === value ? "active" : ""}
+            aria-pressed={mode === value}
+            onClick={() => setModeAndClear(value)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
-      <p className="tool-help">
-        <b>
-          {mode === "review"
-            ? "Reference review:"
-            : `${mode[0]!.toUpperCase()}${mode.slice(1)}:`}
-        </b>{" "}
-        {modeHelp[mode]}
-      </p>
       <div className="outdoor-layout">
         <div className="outdoor-map">
           <CampusMap
             data={mapData}
-            pending={pendingMarker}
-            route={draftFeature}
-            focus={selectedFeature}
-            highlight={selectedFeature}
+            interactionMode={mode}
+            pending={
+              mode === "point"
+                ? pointPosition
+                : mode === "alert"
+                  ? alertPosition
+                  : undefined
+            }
+            snapPoints={mode === "draw" ? snapPoints : []}
+            route={drawFeature}
+            focus={selectedPathFeature}
+            highlight={selectedPathFeature}
             onPick={onMapPick}
+            onPath={(id) => choosePath(id)}
+            onPoint={(id) => {
+              setSelectedPointId(id);
+              setSelectedAlertId("");
+              const point = data.points.find((item) => item.id === id);
+              setPointPosition(point?.coordinates);
+              setPointName(point?.name ?? "");
+              setPointNote(point?.note ?? "");
+            }}
+            onAlert={(id) => {
+              setSelectedAlertId(id);
+              setSelectedPointId("");
+            }}
             onPendingMove={(coordinate) => {
               if (mode === "point") setPointPosition(coordinate);
-              else if (mode === "alert") setAlertPosition(coordinate);
+              if (mode === "alert") setAlertPosition(coordinate);
             }}
           />
         </div>
@@ -482,121 +457,119 @@ export function OutdoorEditor({
               {status}
             </p>
           )}
-          {linkExit && (
-            <section className="candidate-card" aria-label="Link floor exit">
-              <h3>Link exit: {linkExit.name || "Unnamed exit"}</h3>
-              <p>
-                Select a node that already belongs to a verified, published main
-                path.
-              </p>
-              <div className="compact-candidates">
-                {data?.nodes
-                  .filter((node) =>
-                    data.edges.some(
-                      (edge) =>
-                        edge.kind === "main" &&
-                        edge.verified &&
-                        edge.published &&
-                        (edge.from_node_id === node.id ||
-                          edge.to_node_id === node.id),
-                    ),
-                  )
-                  .map((node) => (
-                    <button
-                      key={node.id}
-                      onClick={() => void linkExitToNode(node.id)}
-                    >
-                      <b>{node.id}</b>
-                      <span>
-                        {node.latitude.toFixed(6)}, {node.longitude.toFixed(6)}
-                      </span>
-                    </button>
-                  ))}
-              </div>
-              {!data?.edges.some(
-                (edge) =>
-                  edge.kind === "main" && edge.verified && edge.published,
-              ) && (
-                <p className="error">
-                  No verified published main-path node is available. The exit
-                  cannot be linked yet.
-                </p>
-              )}
-            </section>
-          )}
-          <div className="readiness">
-            <h3>Graph readiness</h3>
-            <dl>
-              <div>
-                <dt>Confirmed edges</dt>
-                <dd>{publishedEdges}</dd>
-              </div>
-              <div>
-                <dt>Provisional OSM</dt>
-                <dd>{provisional}</dd>
-              </div>
-              <div>
-                <dt>Components</dt>
-                <dd>{countComponents(data)}</dd>
-              </div>
-              <div>
-                <dt>Blocked edges</dt>
-                <dd>{blocked}</dd>
-              </div>
-              <div>
-                <dt>Draft edges</dt>
-                <dd>{drafts}</dd>
-              </div>
-            </dl>
-            {publishedEdges < 2 && (
-              <p>
-                Confirmed coverage is limited. Eligible provisional OSM paths
-                can still support a clearly labelled suggested route.
-              </p>
-            )}
-          </div>
-          {mode === "point" && (
-            <section>
-              <h3>Outdoor point</h3>
+          <label className="field">
+            Route or path
+            <select
+              value={selectedPathId}
+              onChange={(event) => choosePath(event.target.value)}
+              aria-label="Select path"
+            >
+              <option value="">Choose a path</option>
+              {pathOptions.map((path) => (
+                <option key={path.id} value={path.id}>
+                  {path.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          {mode === "select" && selectedPath && (
+            <section aria-label="Selected path">
+              <h3>
+                {
+                  pathOptions.find((path) => path.id === selectedPath.id)
+                    ?.displayName
+                }
+              </h3>
               <p className="muted">
-                {pointPosition
-                  ? `${pointPosition[1].toFixed(6)}, ${pointPosition[0].toFixed(6)}`
-                  : "Click the map to place the dot."}
+                {selectedPath.kind === "shortcut" ? "Shortcut" : "Main path"}
               </p>
-              <label className="field">
-                Name
-                <input
-                  value={pointName}
-                  onChange={(event) => setPointName(event.target.value)}
-                />
-              </label>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={pointPublished}
-                  onChange={(event) => setPointPublished(event.target.checked)}
-                />{" "}
-                Publish for visitors
-              </label>
+              <fieldset className="path-state-choices">
+                <legend>Routing status</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="path-state"
+                    checked={blockedChoice === true}
+                    onChange={() => setBlockedChoice(true)}
+                  />{" "}
+                  Block
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="path-state"
+                    checked={blockedChoice === false}
+                    onChange={() => setBlockedChoice(false)}
+                  />{" "}
+                  Good for Routing
+                </label>
+              </fieldset>
               <button
                 className="primary full"
-                disabled={!pointPosition || !pointName.trim()}
-                onClick={savePoint}
+                disabled={
+                  saving ||
+                  blockedChoice === undefined ||
+                  blockedChoice === selectedPath.blocked
+                }
+                onClick={() => void savePathStatus()}
               >
-                Save point
+                {saving ? "Saving…" : "Save routing status"}
               </button>
+              <label className="field">
+                Note in Route{" "}
+                <small>
+                  {pathNote.length}/{maximumPathNote}
+                </small>
+                <textarea
+                  maxLength={maximumPathNote}
+                  value={pathNote}
+                  onChange={(event) => setPathNote(event.target.value)}
+                />
+              </label>
+              <div className="button-row">
+                <button
+                  disabled={
+                    saving ||
+                    !pathNote.trim() ||
+                    pathNote.trim() === (selectedPath.note ?? "")
+                  }
+                  onClick={() => void savePathNote()}
+                >
+                  Save note
+                </button>
+                <button
+                  disabled={saving || !selectedPath.note}
+                  onClick={() => void savePathNote(true)}
+                >
+                  Remove note
+                </button>
+              </div>
+              {selectedPath.alertIds?.length ? (
+                <p className="muted">
+                  Linked alerts: {selectedPath.alertIds.join(", ")}
+                </p>
+              ) : null}
             </section>
           )}
           {mode === "draw" && (
-            <section>
-              <h3>Path draft</h3>
-              <p>{vertices.length} vertices</p>
+            <section aria-label="Draw shortcut path">
+              <h3>Draw shortcut</h3>
+              <p className="muted">
+                Click to add vertices. Snap both ends to a saved path before
+                saving.
+              </p>
+              <p>
+                {vertices.length} vertices ·{" "}
+                {validSnaps
+                  ? "Both ends connected"
+                  : "Both ends need a path snap"}
+              </p>
               <div className="button-row">
                 <button
                   disabled={!vertices.length}
-                  onClick={() => setVertices((value) => value.slice(0, -1))}
+                  onClick={() => setVertices((items) => items.slice(0, -1))}
                 >
-                  Undo vertex
+                  Undo last vertex
                 </button>
                 <button
                   disabled={!vertices.length}
@@ -605,211 +578,147 @@ export function OutdoorEditor({
                   Cancel
                 </button>
               </div>
+              <button
+                className="primary full"
+                disabled={saving || vertices.length < 2 || !validSnaps}
+                onClick={() => void saveDrawnPath()}
+              >
+                {saving ? "Saving…" : "Finish and save"}
+              </button>
+              {vertices.length > 0 && !validSnaps && (
+                <p className="selection-warning">
+                  Snap the first and last vertices within 12 pixels and 5 metres
+                  of saved paths.
+                </p>
+              )}
+            </section>
+          )}
+          {mode === "point" && (
+            <section aria-label="Outdoor point editor">
+              <h3>{selectedPoint ? "Outdoor point" : "Add point"}</h3>
+              <p className="muted">
+                {pointPosition
+                  ? "Location selected"
+                  : "Click the map to place a point."}
+              </p>
               <label className="field">
-                Classification
-                <select
-                  value={pathKind}
-                  onChange={(event) =>
-                    setPathKind(event.target.value as typeof pathKind)
-                  }
-                >
-                  <option value="main">Main path</option>
-                  <option value="shortcut">Unofficial shortcut</option>
-                </select>
+                Name{" "}
+                <input
+                  maxLength={120}
+                  value={pointName}
+                  onChange={(event) => setPointName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                Note{" "}
+                <small>
+                  {pointNote.length}/{maximumPointNote}
+                </small>
+                <textarea
+                  maxLength={maximumPointNote}
+                  value={pointNote}
+                  onChange={(event) => setPointNote(event.target.value)}
+                />
               </label>
               <button
                 className="primary full"
-                disabled={vertices.length < 2}
-                onClick={() => void savePath(false)}
+                disabled={saving || !pointPosition || !pointNote.trim()}
+                onClick={() => void savePoint()}
               >
-                Finish and save draft
+                {saving ? "Saving…" : "Save point"}
               </button>
-              <label className="check caution">
-                <input
-                  type="checkbox"
-                  checked={fieldVerified}
-                  onChange={(event) => setFieldVerified(event.target.checked)}
-                />{" "}
-                I physically verified the whole path and its graph junctions.
-              </label>
-              <button
-                className="publish-button"
-                disabled={vertices.length < 2 || !fieldVerified}
-                onClick={() => void savePath(true)}
-              >
-                Publish connected path
-              </button>
-              <p className="muted">
-                Detached or invalid geometry remains a non-routable draft even
-                after confirmation.
-              </p>
-            </section>
-          )}
-          {mode === "review" && (
-            <section>
-              <h3>OSM references</h3>
-              <div className="candidate-filters">
-                <input
-                  placeholder="Way or status"
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                />
-                <select
-                  value={decisionFilter}
-                  onChange={(event) => setDecisionFilter(event.target.value)}
+              {selectedPoint && (
+                <button
+                  className="danger full"
+                  onClick={() => void removePoint()}
                 >
-                  <option value="all">All statuses</option>
-                  <option value="provisional">Provisional</option>
-                  <option value="approved">Approved reference</option>
-                  <option value="field_verified">
-                    Field-verified / published
-                  </option>
-                  <option value="needs_edit">Needs edit</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-              </div>
-              <div className="compact-candidates">
-                {filteredCandidates.map((candidate) => (
-                  <button
-                    key={candidate.id}
-                    className={
-                      candidate.id === selectedCandidateId ? "selected" : ""
-                    }
-                    onClick={() => setSelectedCandidateId(candidate.id)}
-                  >
-                    <b>Way {candidate.source_way_id}</b>
-                    <span>
-                      {candidateStatus(candidate).replace("_", " ")} ·{" "}
-                      {candidate.coordinates.length} vertices
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {selectedCandidate && (
-                <div className="candidate-card">
-                  <h4>Way {selectedCandidate.source_way_id}</h4>
-                  <p>
-                    {selectedCandidate.coordinates.length} vertices ·{" "}
-                    {candidateStatus(selectedCandidate).replace("_", " ")}
-                  </p>
-                  <div className="decision-buttons">
-                    <button onClick={() => void review("needs_edit")}>
-                      Needs edit
-                    </button>
-                    <button onClick={() => void review("rejected")}>
-                      Reject
-                    </button>
-                    <button onClick={() => void review("approved")}>
-                      Approve reference
-                    </button>
-                  </div>
-                  <label className="check caution">
-                    <input
-                      type="checkbox"
-                      checked={fieldVerified}
-                      onChange={(event) =>
-                        setFieldVerified(event.target.checked)
-                      }
-                    />{" "}
-                    Entire geometry physically verified and junctions checked.
-                  </label>
-                  <button
-                    className="publish-button"
-                    disabled={!fieldVerified}
-                    onClick={() => void promote()}
-                  >
-                    Field-verified: publish main
-                  </button>
-                </div>
+                  Remove point
+                </button>
               )}
             </section>
           )}
           {mode === "alert" && (
-            <section>
-              <h3>Alert / block</h3>
+            <section aria-label="Alert editor">
+              <h3>Add alert</h3>
               <p className="muted">
                 {alertPosition
-                  ? `${alertPosition[1].toFixed(6)}, ${alertPosition[0].toFixed(6)}`
-                  : "Click the affected location."}
+                  ? "Location selected"
+                  : "Click the map to place an alert."}
               </p>
               <label className="field">
-                Visitor message
+                Note{" "}
+                <small>
+                  {alertNote.length}/{maximumPointNote}
+                </small>
                 <textarea
-                  value={alertText}
-                  onChange={(event) => setAlertText(event.target.value)}
+                  maxLength={maximumPointNote}
+                  value={alertNote}
+                  onChange={(event) => setAlertNote(event.target.value)}
                 />
               </label>
-              <fieldset>
-                <legend>Edges to block (optional)</legend>
-                <div className="edge-checks">
-                  {data?.edges
-                    .filter((edge) => edge.verified && edge.published)
-                    .map((edge) => (
-                      <label key={edge.id}>
-                        <input
-                          type="checkbox"
-                          checked={blockedEdgeIds.includes(edge.id)}
-                          onChange={(event) =>
-                            setBlockedEdgeIds((ids) =>
-                              event.target.checked
-                                ? [...ids, edge.id]
-                                : ids.filter((id) => id !== edge.id),
-                            )
-                          }
-                        />{" "}
-                        {edge.id} · {edge.kind}
-                      </label>
-                    ))}
-                </div>
-              </fieldset>
               <button
                 className="primary full"
-                disabled={!alertPosition || !alertText.trim()}
-                onClick={saveAlert}
+                disabled={saving || !alertPosition || !alertNote.trim()}
+                onClick={() => void saveAlert()}
               >
-                {blockedEdgeIds.length
-                  ? "Publish blocking alert"
-                  : "Publish normal alert"}
+                {saving ? "Publishing…" : "Publish alert"}
               </button>
-              <h4>Existing alerts</h4>
+              <h3>Saved alerts</h3>
               <div className="compact-candidates">
-                {data?.alerts.map((alert) => (
-                  <button
+                {data.alerts.map((alert) => (
+                  <div
                     key={alert.id}
-                    onClick={() => void setAlertActive(alert.id, !alert.active)}
+                    className={`saved-alert ${selectedAlertId === alert.id ? "selected" : ""}`}
                   >
-                    <b>
-                      {alert.active ? "Active" : "Resolved"}:{" "}
+                    <button onClick={() => setSelectedAlertId(alert.id)}>
                       {alert.description}
-                    </b>
-                    <span>
-                      {alert.edge_ids.length
-                        ? `${alert.edge_ids.length} blocked edge(s)`
-                        : "Information only"}
-                      {" · click to "}
-                      {alert.active ? "resolve" : "reactivate"}
-                    </span>
-                  </button>
+                    </button>
+                    <button
+                      aria-label="Remove alert"
+                      onClick={() => void removeAlert(alert)}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 ))}
-                {!data?.alerts.length && (
-                  <p className="muted">No alerts have been published.</p>
+                {!data.alerts.length && (
+                  <p className="muted">No alerts have been added.</p>
                 )}
               </div>
+              {selectedAlert && (
+                <p className="alert-detail">{selectedAlert.description}</p>
+              )}
             </section>
           )}
-          {mode === "select" && (
+          {mode === "select" && !selectedPath && (
             <section>
-              <h3>Map workspace</h3>
-              <p>
-                Select a tool above. Named buildings, published routes,
-                shortcuts, outdoor points and dashed OSM references stay visible
-                together.
-              </p>
+              <h3>Outdoor map</h3>
+              <p>Select a stored path on the map or from the list.</p>
               <p className="muted">
-                Eligible OSM geometry may support suggested routes as
-                provisional map data. Only field-verified editor paths are shown
-                as confirmed; rejected and needs-edit ways never route.
+                Buildings, paths, points and alerts remain visible while you
+                edit.
               </p>
+            </section>
+          )}
+          {mode === "select" && selectedPoint && (
+            <section aria-label="Selected outdoor point">
+              <h3>{selectedPoint.name || "Outdoor point"}</h3>
+              <p>{selectedPoint.note || "No note."}</p>
+              <button onClick={() => setModeAndClear("point")}>
+                Edit point
+              </button>
+            </section>
+          )}
+          {mode === "select" && selectedAlert && (
+            <section aria-label="Selected alert">
+              <h3>Alert</h3>
+              <p>{selectedAlert.description}</p>
+              <button
+                className="danger"
+                onClick={() => void removeAlert(selectedAlert)}
+              >
+                Remove alert
+              </button>
             </section>
           )}
         </aside>

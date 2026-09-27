@@ -7,24 +7,26 @@ export type RouteEndpoint =
   | {
       kind: "building";
       buildingId: string;
-      floor: number;
-      exitDoorId?: string;
-      entranceDoorId?: string;
-      roomId?: string;
       approachCoordinates?: Coordinate;
     };
 export interface CampusMapData {
   buildings: FeatureCollection<Polygon, { id: string; name: string }>;
-  referencePaths: FeatureCollection<LineString>;
-  provisionalPaths: FeatureCollection<
+  paths: FeatureCollection<
     LineString,
-    { id: string; sourceWayId: string; status: "provisional" }
+    {
+      id: string;
+      name: string;
+      kind: "main" | "shortcut";
+      blocked: boolean;
+      note: string | null;
+      source: "osm" | "editor";
+      version: number;
+    }
   >;
-  verifiedPaths: FeatureCollection<
-    LineString,
-    { id: string; kind: "main" | "shortcut"; blocked: boolean }
+  points: FeatureCollection<
+    import("geojson").Point,
+    { id: string; name: string; note: string }
   >;
-  points: FeatureCollection;
   alerts: Array<{ id: string; coordinates: Coordinate; description: string }>;
 }
 export interface FloorFeature {
@@ -55,9 +57,9 @@ export type NoRouteCode =
   | "BLOCKED_OR_INELIGIBLE";
 export interface RouteSegment {
   geometry: LineString;
-  source: "editor" | "osm" | "approach";
-  confidence: "confirmed" | "provisional" | "approximate";
-  sourceId?: string;
+  pathId: string;
+  kind: "main" | "shortcut";
+  note: string | null;
 }
 export interface RouteApproach {
   role: "start" | "destination";
@@ -73,8 +75,6 @@ export type RouteResponse =
       notices: string[];
       segments: RouteSegment[];
       approaches: RouteApproach[];
-      containsProvisional: boolean;
-      selectedEntranceDoorId?: string;
       snaps?: Array<{
         original: Coordinate;
         snapped: Coordinate;

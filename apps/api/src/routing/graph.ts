@@ -13,6 +13,9 @@ import type {
 
 export interface GraphArc {
   readonly edgeId: string;
+  readonly parentFeatureId: string;
+  readonly kind: RouteEdge["kind"];
+  readonly note: string | null;
   readonly fromNodeId: string;
   readonly toNodeId: string;
   readonly coordinates: readonly LonLat[];
@@ -55,11 +58,10 @@ export function edgeEligibleForProfile(
   return edge.kind === "main" && edge.wheelchairEligible !== false;
 }
 
-export function edgeIsRoutable(edge: RouteEdge): boolean {
-  if (edge.status === "draft") return false;
-  if (edge.status === "provisional")
-    return edge.source === "osm" && edge.verified === false;
-  return edge.status === "confirmed" ? edge.verified : edge.verified;
+export function edgeIsRoutable(_edge: RouteEdge): boolean {
+  // Verification/publish columns are legacy workflow state. Current path
+  // eligibility is structural and explicit blocks are applied separately.
+  return true;
 }
 
 function finiteCoordinate(coordinate: LonLat): boolean {
@@ -163,6 +165,9 @@ export function buildRoutingGraph(input: {
     adjacency.get(from.id)!.push(
       Object.freeze({
         edgeId: edge.id,
+        parentFeatureId: edge.parentFeatureId ?? edge.sourceOsmId ?? edge.id,
+        kind: edge.kind,
+        note: edge.note ?? null,
         fromNodeId: from.id,
         toNodeId: to.id,
         coordinates,
@@ -176,6 +181,9 @@ export function buildRoutingGraph(input: {
       adjacency.get(to.id)!.push(
         Object.freeze({
           edgeId: edge.id,
+          parentFeatureId: edge.parentFeatureId ?? edge.sourceOsmId ?? edge.id,
+          kind: edge.kind,
+          note: edge.note ?? null,
           fromNodeId: to.id,
           toNodeId: from.id,
           coordinates: Object.freeze([...coordinates].reverse()),

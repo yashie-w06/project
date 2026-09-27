@@ -76,16 +76,7 @@ export type ConnectorPlacement = {
 
 export type FloorIssue = {
   severity: "error" | "warning";
-  code:
-    | "invalid-boundary"
-    | "feature-outside-boundary"
-    | "door-parent-missing"
-    | "invalid-exit-floor"
-    | "invalid-exit-parent"
-    | "exit-outdoor-position-missing"
-    | "exit-main-path-missing"
-    | "connector-id-missing"
-    | "connector-placement-missing";
+  code: "invalid-boundary" | "feature-outside-boundary" | "door-parent-missing";
   message: string;
   featureId?: string;
 };
